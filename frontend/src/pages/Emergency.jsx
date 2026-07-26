@@ -1,5 +1,12 @@
+import Navbar from "../components/Navbar";
+
 function Emergency() {
-  return <h1>Emergency Page</h1>;
+  return (
+    <>
+      <Navbar />
+      <h1>Emergency Page</h1>
+    </>
+  );
 }
 
 export default Emergency;
