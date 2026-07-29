@@ -8,29 +8,32 @@ import Features from "../components/Features";
 function Home() {
   const [source, setSource] = useState("");
   const [destination, setDestination] = useState("");
+
   const [sourceCoords, setSourceCoords] = useState(null);
-const [destinationCoords, setDestinationCoords] = useState(null);
+  const [destinationCoords, setDestinationCoords] = useState(null);
+
+  console.log("Home Source:", sourceCoords);
+  console.log("Home Destination:", destinationCoords);
 
   return (
     <>
       <Navbar />
+
       <Hero />
 
       <RouteForm
-      
-  source={source}
-  setSource={setSource}
-  destination={destination}
-  setDestination={setDestination}
-  setSourceCoords={setSourceCoords}
-  setDestinationCoords={setDestinationCoords}
-
+        source={source}
+        setSource={setSource}
+        destination={destination}
+        setDestination={setDestination}
+        setSourceCoords={setSourceCoords}
+        setDestinationCoords={setDestinationCoords}
       />
 
       <MapView
-  source={source}
-  destination={destination}
-/>
+        sourceCoords={sourceCoords}
+        destinationCoords={destinationCoords}
+      />
 
       <Features />
     </>
