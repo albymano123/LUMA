@@ -1,42 +1,64 @@
-import { useState } from "react";
+import { searchLocation } from "../services/geocodingService";
 import "./RouteForm.css";
-function RouteForm() {
-  const [source, setSource] = useState("");
-  const [destination, setDestination] = useState("");
 
-  const handleFindRoute = () => {
-    alert(`Source: ${source}\nDestination: ${destination}`);
+function RouteForm({
+  source,
+  setSource,
+  destination,
+  setDestination,
+  setSourceCoords,
+  setDestinationCoords,
+}) {
+  const handleFindRoute = async () => {
+    if (!source || !destination) {
+      alert("Please enter both source and destination.");
+      return;
+    }
+
+    try {
+      const sourceResult = await searchLocation(source);
+      const destinationResult = await searchLocation(destination);
+console.log("Source Result:", sourceResult);
+console.log("Destination Result:", destinationResult);
+      if (sourceResult.length > 0) {
+        setSourceCoords([
+          parseFloat(sourceResult[0].lat),
+          parseFloat(sourceResult[0].lon),
+        ]);
+      }
+
+      if (destinationResult.length > 0) {
+        setDestinationCoords([
+          parseFloat(destinationResult[0].lat),
+          parseFloat(destinationResult[0].lon),
+        ]);
+      }
+
+      console.log("Source:", sourceResult);
+      console.log("Destination:", destinationResult);
+    } catch (error) {
+      console.error(error);
+      alert("Unable to fetch locations.");
+    }
   };
 
   return (
-    <div>
-      <h2>Find the Safest Route</h2>
+    <div className="route-form">
+      <h2>Find Safe Route</h2>
 
-      <div>
-        <label>Source</label>
-        <br />
-        <input
-          type="text"
-          placeholder="Enter source"
-          value={source}
-          onChange={(event) => setSource(event.target.value)}
-        />
-      </div>
+      <input
+        type="text"
+        placeholder="Enter Source"
+        value={source}
+        onChange={(e) => setSource(e.target.value)}
+      />
 
-      <br />
-
-      <div>
-        <label>Destination</label>
-        <br />
-        <input
-          type="text"
-          placeholder="Enter destination"
-          value={destination}
-          onChange={(event) => setDestination(event.target.value)}
-        />
-      </div>
-
-      <br />
+      <input
+        type="text"
+        placeholder="Enter Destination"
+        value={destination}
+        onChange={(e) => setDestination(e.target.value)}
+      />
 
       <button onClick={handleFindRoute}>
         Find Safe Route

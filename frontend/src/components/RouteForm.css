@@ -1,10 +1,10 @@
 .route-form {
   width: 400px;
-  margin: 40px auto;
-  padding: 25px;
-  background-color: #ffffff;
-  border-radius: 12px;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  margin: 30px auto;
+  padding: 20px;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.2);
 }
 
 .route-form h2 {
@@ -12,32 +12,27 @@
   margin-bottom: 20px;
 }
 
-.route-form label {
-  font-weight: bold;
-}
-
 .route-form input {
   width: 100%;
   padding: 10px;
-  margin-top: 5px;
   margin-bottom: 15px;
-  border: 1px solid #ccc;
-  border-radius: 6px;
   font-size: 16px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
   box-sizing: border-box;
 }
 
 .route-form button {
   width: 100%;
   padding: 12px;
-  background-color: #0077ff;
+  background-color: #1976d2;
   color: white;
   border: none;
-  border-radius: 6px;
-  font-size: 16px;
+  border-radius: 5px;
   cursor: pointer;
+  font-size: 16px;
 }
 
 .route-form button:hover {
-  background-color: #005fcc;
+  background-color: #1565c0;
 }
