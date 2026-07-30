@@ -4,6 +4,7 @@ import Hero from "../components/Hero";
 import RouteForm from "../components/RouteForm";
 import MapView from "../components/MapView";
 import Features from "../components/Features";
+import RouteInfo from "../components/RouteInfo";
 
 function Home() {
   const [source, setSource] = useState("");
@@ -12,13 +13,13 @@ function Home() {
   const [sourceCoords, setSourceCoords] = useState(null);
   const [destinationCoords, setDestinationCoords] = useState(null);
 
-  console.log("Home Source:", sourceCoords);
-  console.log("Home Destination:", destinationCoords);
+  // NEW STATES
+  const [distance, setDistance] = useState("");
+  const [time, setTime] = useState("");
 
   return (
     <>
       <Navbar />
-
       <Hero />
 
       <RouteForm
@@ -33,6 +34,13 @@ function Home() {
       <MapView
         sourceCoords={sourceCoords}
         destinationCoords={destinationCoords}
+        setDistance={setDistance}
+        setTime={setTime}
+      />
+
+      <RouteInfo
+        distance={distance}
+        time={time}
       />
 
       <Features />

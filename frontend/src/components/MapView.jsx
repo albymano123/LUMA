@@ -6,13 +6,18 @@ import {
   Popup,
   useMap,
 } from "react-leaflet";
-import L from "leaflet";
 
+import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "leaflet-routing-machine";
 import "leaflet-routing-machine/dist/leaflet-routing-machine.css";
 
-function Routing({ sourceCoords, destinationCoords }) {
+function Routing({
+  sourceCoords,
+  destinationCoords,
+  setDistance,
+  setTime,
+}) {
   const map = useMap();
 
   useEffect(() => {
@@ -23,25 +28,59 @@ function Routing({ sourceCoords, destinationCoords }) {
         L.latLng(sourceCoords[0], sourceCoords[1]),
         L.latLng(destinationCoords[0], destinationCoords[1]),
       ],
+
       lineOptions: {
-        styles: [{ color: "blue", weight: 5 }],
+        styles: [
+          {
+            color: "blue",
+            weight: 5,
+          },
+        ],
       },
+
       routeWhileDragging: false,
       addWaypoints: false,
       draggableWaypoints: false,
       fitSelectedRoutes: true,
       show: false,
+      createMarker: () => null,
     }).addTo(map);
+
+    routingControl.on("routesfound", (e) => {
+      const route = e.routes[0];
+
+      const distance = (
+        route.summary.totalDistance / 1000
+      ).toFixed(2);
+
+      const time = Math.round(
+        route.summary.totalTime / 60
+      );
+
+      setDistance(distance);
+      setTime(time);
+    });
 
     return () => {
       map.removeControl(routingControl);
     };
-  }, [map, sourceCoords, destinationCoords]);
+  }, [
+    map,
+    sourceCoords,
+    destinationCoords,
+    setDistance,
+    setTime,
+  ]);
 
   return null;
 }
 
-function MapView({ sourceCoords, destinationCoords }) {
+function MapView({
+  sourceCoords,
+  destinationCoords,
+  setDistance,
+  setTime,
+}) {
   return (
     <MapContainer
       center={[10.8505, 76.2711]}
@@ -69,6 +108,8 @@ function MapView({ sourceCoords, destinationCoords }) {
         <Routing
           sourceCoords={sourceCoords}
           destinationCoords={destinationCoords}
+          setDistance={setDistance}
+          setTime={setTime}
         />
       )}
     </MapContainer>
