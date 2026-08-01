@@ -5,17 +5,26 @@ import RouteForm from "../components/RouteForm";
 import MapView from "../components/MapView";
 import Features from "../components/Features";
 import RouteInfo from "../components/RouteInfo";
-
+import WeatherInfo from "../components/WeatherInfo";
+import SafetyScore from "../components/SafetyScore";
 function Home() {
+  // Route Input
   const [source, setSource] = useState("");
   const [destination, setDestination] = useState("");
-
+const [weather, setWeather] = useState(null);
+  // Route Coordinates
   const [sourceCoords, setSourceCoords] = useState(null);
   const [destinationCoords, setDestinationCoords] = useState(null);
 
-  // NEW STATES
+  // Route Information
   const [distance, setDistance] = useState("");
   const [time, setTime] = useState("");
+
+  // Nearby Hospitals
+  const [hospitals, setHospitals] = useState([]);
+
+  // Nearby Police Stations
+  const [policeStations, setPoliceStations] = useState([]);
 
   return (
     <>
@@ -30,20 +39,32 @@ function Home() {
         setSourceCoords={setSourceCoords}
         setDestinationCoords={setDestinationCoords}
       />
+<MapView
+  sourceCoords={sourceCoords}
+  destinationCoords={destinationCoords}
+  hospitals={hospitals}
+  policeStations={policeStations}
+  setHospitals={setHospitals}
+  setPoliceStations={setPoliceStations}
+  setDistance={setDistance}
+  setTime={setTime}
+  setWeather={setWeather}
+/>
 
-      <MapView
-        sourceCoords={sourceCoords}
-        destinationCoords={destinationCoords}
-        setDistance={setDistance}
-        setTime={setTime}
-      />
+<RouteInfo
+  distance={distance}
+  time={time}
+/>
 
-      <RouteInfo
-        distance={distance}
-        time={time}
-      />
+<WeatherInfo weather={weather} />
 
-      <Features />
+<SafetyScore
+  weather={weather}
+  hospitals={hospitals}
+  policeStations={policeStations}
+/>
+
+<Features />
     </>
   );
 }
