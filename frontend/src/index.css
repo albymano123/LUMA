@@ -109,3 +109,108 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+/* ==================================
+   LUMAPATH RESPONSIVE DESIGN
+================================== */
+
+/* Prevent elements from exceeding screen width */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  overflow-x: hidden;
+}
+
+/* Make images responsive */
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ==================================
+   TABLET
+================================== */
+
+@media (max-width: 768px) {
+
+  h1 {
+    font-size: 2rem !important;
+  }
+
+  h2 {
+    font-size: 1.5rem !important;
+  }
+
+  h3 {
+    font-size: 1.2rem !important;
+  }
+
+  /* Map size */
+  .leaflet-container {
+    height: 420px !important;
+    width: 100% !important;
+  }
+
+  /* Inputs */
+  input {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  /* Buttons */
+  button {
+    max-width: 100%;
+  }
+
+  /* Emergency buttons / links */
+  a {
+    max-width: 100%;
+  }
+}
+
+
+/* ==================================
+   MOBILE
+================================== */
+
+@media (max-width: 480px) {
+
+  h1 {
+    font-size: 1.7rem !important;
+  }
+
+  h2 {
+    font-size: 1.3rem !important;
+  }
+
+  h3 {
+    font-size: 1.1rem !important;
+  }
+
+  p {
+    font-size: 0.95rem;
+  }
+
+  /* Smaller map on phone */
+  .leaflet-container {
+    height: 350px !important;
+    width: 100% !important;
+  }
+
+  /* Inputs */
+  input {
+    width: 100%;
+    font-size: 16px;
+  }
+
+  /* Buttons */
+  button {
+    width: 100%;
+    max-width: 100%;
+  }
+}

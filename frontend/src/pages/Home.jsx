@@ -7,6 +7,10 @@ import Features from "../components/Features";
 import RouteInfo from "../components/RouteInfo";
 import WeatherInfo from "../components/WeatherInfo";
 import SafetyScore from "../components/SafetyScore";
+import EmergencySOS from "../components/EmergencySOS";
+import MapLegend from "../components/MapLegend";
+import RouteStatus from "../components/RouteStatus";
+import Footer from "../components/Footer";
 function Home() {
   // Route Input
   const [source, setSource] = useState("");
@@ -39,6 +43,11 @@ const [weather, setWeather] = useState(null);
         setSourceCoords={setSourceCoords}
         setDestinationCoords={setDestinationCoords}
       />
+      <RouteStatus
+  sourceCoords={sourceCoords}
+  destinationCoords={destinationCoords}
+  distance={distance}
+/>
 <MapView
   sourceCoords={sourceCoords}
   destinationCoords={destinationCoords}
@@ -50,7 +59,7 @@ const [weather, setWeather] = useState(null);
   setTime={setTime}
   setWeather={setWeather}
 />
-
+<MapLegend />
 <RouteInfo
   distance={distance}
   time={time}
@@ -64,7 +73,11 @@ const [weather, setWeather] = useState(null);
   policeStations={policeStations}
 />
 
+<EmergencySOS />
+
 <Features />
+
+<Footer />
     </>
   );
 }
