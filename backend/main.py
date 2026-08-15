@@ -1,194 +1,58 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+
+from routing_service import get_alternative_routes
+from route_analyzer import analyze_all_routes
 
 
 # ==================================================
-# DATABASE
-# ==================================================
-
-from database import engine, get_db
-
-from models import Base, Route
-
-
-# ==================================================
-# SAFETY SYSTEM
-# ==================================================
-
-from safety import (
-    calculate_safety_score,
-    compare_routes,
-    recommend_best_route
-)
-
-
-# ==================================================
-# ROUTING
-# ==================================================
-
-from routing_service import (
-    get_alternative_routes
-)
-
-
-# ==================================================
-# ROUTE ANALYSIS
-# ==================================================
-
-from route_analyzer import (
-    analyze_all_routes
-)
-
-
-# ==================================================
-# CREATE DATABASE TABLES
-# ==================================================
-
-Base.metadata.create_all(
-    bind=engine
-)
-
-
-# ==================================================
-# FASTAPI APPLICATION
+# CREATE FASTAPI APPLICATION
 # ==================================================
 
 app = FastAPI(
-
     title="LumaPath API",
-
-    description=(
-        "Safety-Aware Route Recommendation Backend"
-    ),
-
+    description="AI-Powered Safety Navigation Backend",
     version="1.0.0"
-
 )
 
 
 # ==================================================
 # CORS
+# ==================================================
 #
-# Allows React frontend to communicate
-# with FastAPI.
+# React/Vite runs on localhost:5173 normally.
+#
+# We allow both localhost and 127.0.0.1 because
+# browsers treat them as different origins.
+#
 # ==================================================
 
 app.add_middleware(
-
     CORSMiddleware,
 
     allow_origins=[
-
         "http://localhost:5173",
+        "http://127.0.0.1:5173",
 
-        "http://127.0.0.1:5173"
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
 
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
     ],
 
     allow_credentials=True,
 
     allow_methods=["*"],
 
-    allow_headers=["*"]
-
+    allow_headers=["*"],
 )
 
 
 # ==================================================
-# HOME
+# REQUEST MODEL
 # ==================================================
-
-@app.get("/")
-def home():
-
-    return {
-
-        "message":
-        "LumaPath Backend is running"
-
-    }
-
-
-# ==================================================
-# PYDANTIC MODELS
-# ==================================================
-
-
-# --------------------------------------------------
-# ROUTE DATABASE DATA
-# --------------------------------------------------
-
-class RouteData(BaseModel):
-
-    source: str
-
-    destination: str
-
-
-    source_lat: float
-
-    source_lon: float
-
-
-    destination_lat: float
-
-    destination_lon: float
-
-
-    distance: float
-
-    duration: float
-
-    safety_score: float
-
-
-# --------------------------------------------------
-# BASIC SAFETY DATA
-# --------------------------------------------------
-
-class SafetyData(BaseModel):
-
-    hospitals: int
-
-    police_stations: int
-
-    precipitation: float
-
-    wind_speed: float
-
-
-# --------------------------------------------------
-# ONE ROUTE FOR MANUAL SAFETY COMPARISON
-# --------------------------------------------------
-
-class RouteSafetyData(BaseModel):
-
-    name: str
-
-    hospitals: int
-
-    police_stations: int
-
-    precipitation: float
-
-    wind_speed: float
-
-
-# --------------------------------------------------
-# MULTIPLE ROUTES
-# --------------------------------------------------
-
-class RouteComparisonData(BaseModel):
-
-    routes: list[RouteSafetyData]
-
-
-# --------------------------------------------------
-# REAL ROUTING REQUEST
-# --------------------------------------------------
 
 class RouteRequest(BaseModel):
 
@@ -202,369 +66,301 @@ class RouteRequest(BaseModel):
 
 
 # ==================================================
-# DATABASE ENDPOINT
-# SAVE ROUTE
+# ROOT
 # ==================================================
 
-@app.post("/route")
-def create_route(
-
-    route: RouteData,
-
-    db: Session = Depends(get_db)
-
-):
-
-
-    new_route = Route(
-
-        source=route.source,
-
-        destination=route.destination,
-
-
-        source_lat=route.source_lat,
-
-        source_lon=route.source_lon,
-
-
-        destination_lat=
-        route.destination_lat,
-
-        destination_lon=
-        route.destination_lon,
-
-
-        distance=route.distance,
-
-        duration=route.duration,
-
-        safety_score=route.safety_score
-
-    )
-
-
-    db.add(
-        new_route
-    )
-
-
-    db.commit()
-
-
-    db.refresh(
-        new_route
-    )
-
+@app.get("/")
+async def root():
 
     return {
-
-        "message":
-        "Route saved successfully",
-
-        "route_id":
-        new_route.id
-
+        "message": "LumaPath Backend is running",
+        "status": "OK"
     }
 
 
 # ==================================================
-# DATABASE ENDPOINT
-# GET SAVED ROUTES
+# HEALTH CHECK
 # ==================================================
 
-@app.get("/routes")
-def get_routes(
-
-    db: Session = Depends(get_db)
-
-):
-
-    routes = (
-        db.query(Route)
-        .all()
-    )
-
-
-    return routes
-
-
-# ==================================================
-# BASIC SAFETY ANALYSIS
-# ==================================================
-
-@app.post("/safety/analyze")
-def analyze_safety(
-
-    data: SafetyData
-
-):
-
-
-    result = calculate_safety_score(
-
-        hospitals=
-        data.hospitals,
-
-        police_stations=
-        data.police_stations,
-
-        precipitation=
-        data.precipitation,
-
-        wind_speed=
-        data.wind_speed
-
-    )
-
-
-    return result
-
-
-# ==================================================
-# MANUAL ROUTE COMPARISON
-# ==================================================
-
-@app.post("/safety/compare")
-def compare_route_safety(
-
-    data: RouteComparisonData
-
-):
-
-
-    routes = [
-
-        route.model_dump()
-
-        for route in data.routes
-
-    ]
-
-
-    result = compare_routes(
-        routes
-    )
-
-
-    return result
-
-
-# ==================================================
-# REAL OSRM ALTERNATIVE ROUTES
-#
-# This endpoint ONLY gets routes.
-# It does not perform safety analysis.
-# ==================================================
-
-@app.post("/routes/alternatives")
-async def alternative_routes(
-
-    data: RouteRequest
-
-):
-
-
-    routes = await get_alternative_routes(
-
-        source_lat=
-        data.source_lat,
-
-        source_lon=
-        data.source_lon,
-
-
-        destination_lat=
-        data.destination_lat,
-
-        destination_lon=
-        data.destination_lon
-
-    )
-
+@app.get("/health")
+async def health():
 
     return {
-
-        "total_routes":
-        len(routes),
-
-        "routes":
-        routes
-
+        "status": "healthy"
     }
 
 
 # ==================================================
-# MAIN LUMAPATH SAFE ROUTE ENDPOINT
+# SAFE ROUTE
 # ==================================================
 
 @app.post("/safe-route")
-async def find_safe_route(
-
-    data: RouteRequest
-
+async def safe_route(
+    request: RouteRequest
 ):
 
+    print()
+    print(
+        "======================================"
+    )
 
-    # ==================================================
-    # STEP 1
-    #
-    # Get REAL road alternatives from OSRM
-    # ==================================================
+    print(
+        "LUMAPATH SAFE ROUTE REQUEST"
+    )
 
-    routes = await get_alternative_routes(
+    print(
+        "======================================"
+    )
 
-        source_lat=
-        data.source_lat,
+    print(
+        "Source:",
+        request.source_lat,
+        request.source_lon
+    )
 
-        source_lon=
-        data.source_lon,
-
-
-        destination_lat=
-        data.destination_lat,
-
-        destination_lon=
-        data.destination_lon
-
+    print(
+        "Destination:",
+        request.destination_lat,
+        request.destination_lon
     )
 
 
     # ==================================================
-    # STEP 2
-    #
-    # Make sure OSRM returned something.
+    # GET ROUTES FROM OSRM
+    # ==================================================
+
+    try:
+
+        routes = await get_alternative_routes(
+
+            request.source_lat,
+
+            request.source_lon,
+
+            request.destination_lat,
+
+            request.destination_lon
+
+        )
+
+    except Exception as error:
+
+        print(
+            "OSRM routing error:",
+            error
+        )
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail={
+                "message":
+                "Unable to calculate routes",
+
+                "error":
+                str(error)
+            }
+
+        )
+
+
+    # ==================================================
+    # CHECK ROUTES
     # ==================================================
 
     if not routes:
 
-        return {
+        raise HTTPException(
 
-            "message":
-            "No routes found",
+            status_code=404,
 
-            "total_routes":
-            0,
+            detail={
+                "message":
+                "No routes found"
+            }
 
-            "recommended_route":
-            None,
-
-            "routes":
-            []
-
-        }
+        )
 
 
     print(
-        "Routes entering safety analysis:",
+        "Routes returned by OSRM:",
         len(routes)
     )
 
 
     # ==================================================
-    # STEP 3
+    # ANALYZE EACH ROUTE
     #
-    # Analyze EVERY route.
+    # This is where:
     #
-    # route_analyzer.py obtains:
+    # Route geometry
+    #       ↓
+    # Hospitals along route
+    # Police stations along route
+    # Weather
+    # Safety score
     #
-    # hospitals
-    # police stations
-    # precipitation
-    # wind
-    #
-    # and calculates safety score.
+    # are calculated.
     # ==================================================
 
-    analyzed_routes = (
-        await analyze_all_routes(
-            routes
+    try:
+
+        analyzed_routes = (
+
+            await analyze_all_routes(
+                routes
+            )
+
+        )
+
+    except Exception as error:
+
+        print(
+            "Route analysis error:",
+            error
+        )
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail={
+                "message":
+                "Unable to analyze routes",
+
+                "error":
+                str(error)
+            }
+
+        )
+
+
+    # ==================================================
+    # FIND SAFEST ROUTE
+    # ==================================================
+
+    if not analyzed_routes:
+
+        raise HTTPException(
+
+            status_code=404,
+
+            detail={
+                "message":
+                "No analyzed routes available"
+            }
+
+        )
+
+
+    # Highest safety score is recommended.
+    #
+    # If two routes have the same score,
+    # shorter distance is preferred.
+    #
+    recommended_route = max(
+
+        analyzed_routes,
+
+        key=lambda route: (
+
+            route.get(
+                "safety_score",
+                0
+            ),
+
+            -route.get(
+                "distance_km",
+                float("inf")
+            )
+
+        )
+
+    )
+
+
+    print()
+    print(
+        "RECOMMENDED ROUTE:"
+    )
+
+    print(
+        recommended_route["name"]
+    )
+
+    print(
+        "Safety Score:",
+        recommended_route.get(
+            "safety_score"
+        )
+    )
+
+    print(
+        "Risk Level:",
+        recommended_route.get(
+            "risk_level"
+        )
+    )
+
+    print(
+        "Hospitals:",
+        recommended_route.get(
+            "hospital_count",
+            0
+        )
+    )
+
+    print(
+        "Police Stations:",
+        recommended_route.get(
+            "police_station_count",
+            0
         )
     )
 
 
     print(
-        "Routes after safety analysis:",
-        len(analyzed_routes)
+        "======================================"
     )
 
 
     # ==================================================
-    # STEP 4
-    #
-    # Select BEST PRACTICAL ROUTE.
-    #
-    # IMPORTANT:
-    #
-    # Previously we used:
-    #
-    # max(safety_score)
-    #
-    # Now we use our recommendation function.
-    #
-    # It considers:
-    #
-    # Safety
-    # +
-    # Distance
-    # +
-    # Duration
-    # ==================================================
-
-    recommended_route = (
-        recommend_best_route(
-            analyzed_routes
-        )
-    )
-
-
-    # ==================================================
-    # STEP 5
-    #
-    # Debug recommended route
-    # ==================================================
-
-    if recommended_route:
-
-        print("\n")
-
-        print(
-            "LumaPath recommended:",
-            recommended_route["name"]
-        )
-
-        print(
-            "Safety score:",
-            recommended_route[
-                "safety_score"
-            ]
-        )
-
-        print(
-            "Recommendation score:",
-            recommended_route[
-                "recommendation_score"
-            ]
-        )
-
-        print("\n")
-
-
-    # ==================================================
-    # STEP 6
-    #
-    # SEND EVERYTHING TO REACT
+    # RESPONSE
     # ==================================================
 
     return {
 
+        "success": True,
+
         "total_routes":
         len(analyzed_routes),
 
-        "recommended_route":
-        recommended_route,
-
         "routes":
-        analyzed_routes
+        analyzed_routes,
+
+        "recommended_route":
+        recommended_route
 
     }
+
+
+# ==================================================
+# RUN DIRECTLY
+# ==================================================
+
+if __name__ == "__main__":
+
+    import uvicorn
+
+    uvicorn.run(
+
+        "main:app",
+
+        host="0.0.0.0",
+
+        port=8000,
+
+        reload=True
+
+    )

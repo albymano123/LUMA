@@ -1,146 +1,390 @@
-from emergency_service import get_nearby_emergency_services
-from weather_service import get_weather
-from safety import calculate_safety_score
+from emergency_service import (
+    get_emergency_services_along_route
+)
+
+from weather_service import (
+    get_weather
+)
+
+from safety import (
+    calculate_safety_score
+)
 
 
-# Select a small number of representative points
-# from the complete route geometry.
-def sample_route_points(coordinates, max_points=10):
+# ==================================================
+# SAMPLE ROUTE POINTS
+# ==================================================
+
+def sample_route_points(
+
+    coordinates,
+
+    max_points=5
+
+):
+
     if not coordinates:
+
         return []
 
+
     if len(coordinates) <= max_points:
+
         return coordinates
 
-    step = max(1, len(coordinates) // max_points)
 
-    sampled_points = coordinates[::step]
+    indexes = [
 
-    return sampled_points[:max_points]
+        round(
+
+            i * (len(coordinates) - 1)
+
+            / (max_points - 1)
+
+        )
+
+        for i in range(max_points)
+
+    ]
 
 
-# Analyze ONE real route.
+    return [
+
+        coordinates[index]
+
+        for index in indexes
+
+    ]
+
+
+# ==================================================
+# ANALYZE ONE ROUTE
+# ==================================================
+
 async def analyze_route(route):
-    coordinates = route["geometry"]["coordinates"]
 
-    # Use only 5 points for now to avoid too many
-    # requests to public APIs such as Overpass.
-    sampled_points = sample_route_points(
-        coordinates,
-        max_points=5
+    print()
+    print(
+        "======================================"
     )
 
-    total_hospitals = 0
-    total_police = 0
+    print(
+        "ANALYZING:",
+        route["name"]
+    )
+
+    print(
+        "======================================"
+    )
+
+
+    # ------------------------------------------------
+    # GET OSRM GEOMETRY
+    # ------------------------------------------------
+
+    coordinates = (
+
+        route
+
+        .get(
+            "geometry",
+            {}
+        )
+
+        .get(
+            "coordinates",
+            []
+        )
+
+    )
+
+
+    # ------------------------------------------------
+    # FIND HOSPITALS + POLICE ALONG THIS ROUTE
+    # ------------------------------------------------
+
+    emergency = (
+
+        await get_emergency_services_along_route(
+
+            coordinates,
+
+            radius=1500,
+
+            max_points=12
+
+        )
+
+    )
+
+
+    hospitals = emergency.get(
+
+        "hospitals",
+
+        []
+
+    )
+
+
+    police_stations = emergency.get(
+
+        "police_stations",
+
+        []
+
+    )
+
+
+    hospital_count = len(
+        hospitals
+    )
+
+
+    police_station_count = len(
+        police_stations
+    )
+
+
+    print(
+
+        f"{route['name']} → "
+
+        f"{hospital_count} hospitals | "
+
+        f"{police_station_count} police stations"
+
+    )
+
+
+    # ------------------------------------------------
+    # WEATHER ALONG ROUTE
+    # ------------------------------------------------
+
+    weather_points = (
+
+        sample_route_points(
+
+            coordinates,
+
+            max_points=5
+
+        )
+
+    )
+
 
     precipitation_values = []
+
     wind_values = []
 
-    # Analyze each sampled location along the route.
-    for point in sampled_points:
 
-        # GeoJSON/OSRM coordinate order:
-        # [longitude, latitude]
+    for point in weather_points:
+
         longitude = point[0]
+
         latitude = point[1]
 
-        # -----------------------------
-        # Emergency services
-        # -----------------------------
-        try:
-            emergency = await get_nearby_emergency_services(
-                latitude,
-                longitude
+
+        weather = await get_weather(
+
+            latitude,
+
+            longitude
+
+        )
+
+
+        precipitation_values.append(
+
+            float(
+
+                weather.get(
+
+                    "precipitation",
+
+                    0
+
+                )
+
             )
 
-            total_hospitals += emergency["hospitals"]
-            total_police += emergency["police_stations"]
+        )
 
-        except Exception as error:
-            print(
-                "Emergency service error:",
-                error
+
+        wind_values.append(
+
+            float(
+
+                weather.get(
+
+                    "wind_speed",
+
+                    0
+
+                )
+
             )
 
-        # -----------------------------
-        # Weather
-        # -----------------------------
-        try:
-            weather = await get_weather(
-                latitude,
-                longitude
+        )
+
+
+    # ------------------------------------------------
+    # AVERAGE WEATHER
+    # ------------------------------------------------
+
+    if precipitation_values:
+
+        average_precipitation = (
+
+            sum(
+                precipitation_values
             )
 
-            precipitation_values.append(
-                weather["precipitation"]
+            /
+
+            len(
+                precipitation_values
             )
 
-            wind_values.append(
-                weather["wind_speed"]
+        )
+
+    else:
+
+        average_precipitation = 0
+
+
+    if wind_values:
+
+        average_wind = (
+
+            sum(
+                wind_values
             )
 
-        except Exception as error:
-            print(
-                "Weather error:",
-                error
+            /
+
+            len(
+                wind_values
             )
 
-    # -----------------------------
-    # Calculate average weather
-    # -----------------------------
-    average_precipitation = (
-        sum(precipitation_values)
-        / len(precipitation_values)
-        if precipitation_values
-        else 0
-    )
+        )
 
-    average_wind = (
-        sum(wind_values)
-        / len(wind_values)
-        if wind_values
-        else 0
-    )
+    else:
 
-    # -----------------------------
-    # Calculate route safety
-    # -----------------------------
+        average_wind = 0
+
+
+    # ------------------------------------------------
+    # SAFETY SCORE
+    # ------------------------------------------------
+
     safety = calculate_safety_score(
-        hospitals=total_hospitals,
-        police_stations=total_police,
-        precipitation=average_precipitation,
-        wind_speed=average_wind
+
+        hospitals=
+        hospital_count,
+
+        police_stations=
+        police_station_count,
+
+        precipitation=
+        average_precipitation,
+
+        wind_speed=
+        average_wind
+
     )
+
+
+    # ------------------------------------------------
+    # RETURN ROUTE DATA
+    # ------------------------------------------------
 
     return {
-        "hospitals": total_hospitals,
-        "police_stations": total_police,
-        "precipitation": round(
+
+        # OSRM data
+        **route,
+
+
+        # Emergency services
+        "hospitals":
+        hospitals,
+
+        "police_stations":
+        police_stations,
+
+
+        # Counts
+        "hospital_count":
+        hospital_count,
+
+        "police_station_count":
+        police_station_count,
+
+
+        # Weather
+        "precipitation":
+        round(
             average_precipitation,
             2
         ),
-        "wind_speed": round(
+
+        "wind_speed":
+        round(
             average_wind,
             2
         ),
-        "safety_score": safety["safety_score"],
-        "risk_level": safety["risk_level"]
+
+
+        # Safety
+        "safety_score":
+        safety["safety_score"],
+
+        "risk_level":
+        safety["risk_level"]
+
     }
 
 
-# Analyze ALL alternative routes.
-async def analyze_all_routes(routes):
+# ==================================================
+# ANALYZE ALL ROUTES
+# ==================================================
+
+async def analyze_all_routes(
+
+    routes
+
+):
+
     analyzed_routes = []
+
 
     for route in routes:
 
-        safety_data = await analyze_route(route)
+        analyzed_route = (
 
-        # Combine OSRM route information
-        # with calculated safety information.
-        analyzed_routes.append({
-            **route,
-            **safety_data
-        })
+            await analyze_route(
+
+                route
+
+            )
+
+        )
+
+
+        analyzed_routes.append(
+
+            analyzed_route
+
+        )
+
+
+    print()
+
+    print(
+        "Total routes analyzed:",
+        len(analyzed_routes)
+    )
+
 
     return analyzed_routes

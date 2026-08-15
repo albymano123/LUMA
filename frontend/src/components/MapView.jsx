@@ -15,7 +15,6 @@ import "leaflet/dist/leaflet.css";
 import "leaflet-routing-machine";
 import "leaflet-routing-machine/dist/leaflet-routing-machine.css";
 
-import { searchNearbyEmergencyServices } from "../Services/overpassService";
 import { getWeather } from "../Services/weatherService";
 
 
@@ -31,7 +30,9 @@ const hospitalIcon = new L.Icon({
     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 
   iconSize: [25, 41],
+
   iconAnchor: [12, 41],
+
   popupAnchor: [1, -34],
 });
 
@@ -48,28 +49,84 @@ const policeIcon = new L.Icon({
     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 
   iconSize: [25, 41],
+
   iconAnchor: [12, 41],
+
   popupAnchor: [1, -34],
 });
 
 
 // ==================================================
-// EXISTING FRONTEND ROUTING
+// GET LATITUDE / LONGITUDE FROM OSM OBJECT
+// ==================================================
+
+function getElementPosition(element) {
+
+  // ----------------------------------------------
+  // NODE
+  // ----------------------------------------------
+
+  if (
+    element?.lat != null &&
+    element?.lon != null
+  ) {
+
+    return [
+      Number(element.lat),
+      Number(element.lon),
+    ];
+
+  }
+
+
+  // ----------------------------------------------
+  // WAY
+  //
+  // Overpass returns the center for ways because
+  // our backend uses:
+  //
+  // out center;
+  // ----------------------------------------------
+
+  if (
+    element?.center?.lat != null &&
+    element?.center?.lon != null
+  ) {
+
+    return [
+      Number(element.center.lat),
+      Number(element.center.lon),
+    ];
+
+  }
+
+
+  return null;
+}
+
+
+// ==================================================
+// ORIGINAL FRONTEND ROUTING
 //
-// This is your original Leaflet Routing Machine
-// functionality.
+// This route is shown before backend analysis.
 //
-// We use this BEFORE backend analysis.
+// IMPORTANT:
+// Emergency services are NO LONGER searched here.
+// The backend now searches along the actual route.
 // ==================================================
 
 function Routing({
+
   sourceCoords,
+
   destinationCoords,
+
   setDistance,
+
   setTime,
-  setHospitals,
-  setPoliceStations,
+
   setWeather,
+
 }) {
 
   const map = useMap();
@@ -77,62 +134,77 @@ function Routing({
 
   useEffect(() => {
 
-    if (!sourceCoords || !destinationCoords) {
+    if (
+      !sourceCoords ||
+      !destinationCoords
+    ) {
+
       return;
+
     }
 
 
-    const routingControl = L.Routing.control({
+    // ----------------------------------------------
+    // CREATE ROUTING CONTROL
+    // ----------------------------------------------
 
-      waypoints: [
+    const routingControl =
+      L.Routing.control({
 
-        L.latLng(
-          sourceCoords[0],
-          sourceCoords[1]
-        ),
+        waypoints: [
 
-        L.latLng(
-          destinationCoords[0],
-          destinationCoords[1]
-        ),
+          L.latLng(
+            sourceCoords[0],
+            sourceCoords[1]
+          ),
 
-      ],
+          L.latLng(
+            destinationCoords[0],
+            destinationCoords[1]
+          ),
 
-
-      lineOptions: {
-
-        styles: [
-          {
-            color: "blue",
-            weight: 5,
-          },
         ],
 
-      },
+
+        lineOptions: {
+
+          styles: [
+            {
+              color: "blue",
+
+              weight: 5,
+            },
+          ],
+
+        },
 
 
-      routeWhileDragging: false,
+        routeWhileDragging: false,
 
-      addWaypoints: false,
+        addWaypoints: false,
 
-      draggableWaypoints: false,
+        draggableWaypoints: false,
 
-      fitSelectedRoutes: true,
+        fitSelectedRoutes: true,
 
-      show: false,
+        show: false,
 
-      createMarker: () => null,
+        createMarker: () => null,
 
-    }).addTo(map);
+      }).addTo(map);
 
 
+    // ----------------------------------------------
+    // ROUTE FOUND
+    // ----------------------------------------------
 
     routingControl.on(
       "routesfound",
 
       async (e) => {
 
-        const route = e.routes[0];
+        const route =
+          e.routes[0];
 
 
         // ------------------------------------------
@@ -140,7 +212,10 @@ function Routing({
         // ------------------------------------------
 
         const distance = (
-          route.summary.totalDistance / 1000
+
+          route.summary.totalDistance
+          / 1000
+
         ).toFixed(2);
 
 
@@ -149,67 +224,30 @@ function Routing({
         // ------------------------------------------
 
         const time = Math.round(
-          route.summary.totalTime / 60
+
+          route.summary.totalTime
+          / 60
+
         );
 
 
-        setDistance(distance);
+        setDistance(
+          distance
+        );
 
-        setTime(time);
+        setTime(
+          time
+        );
 
 
+        // ------------------------------------------
+        // WEATHER
+        //
+        // We keep the existing weather behaviour.
+        // Emergency services are handled by backend.
+        // ------------------------------------------
 
         try {
-
-          // ========================================
-          // HOSPITALS + POLICE
-          // ========================================
-
-          const services =
-            await searchNearbyEmergencyServices(
-
-              sourceCoords[0],
-
-              sourceCoords[1]
-
-            );
-
-
-          if (services.success) {
-
-            setHospitals(
-              services.hospitals
-            );
-
-            setPoliceStations(
-              services.policeStations
-            );
-
-
-            console.log(
-              "Hospitals:",
-              services.hospitals
-            );
-
-
-            console.log(
-              "Police:",
-              services.policeStations
-            );
-
-          } else {
-
-            console.warn(
-              "Overpass request failed."
-            );
-
-          }
-
-
-
-          // ========================================
-          // WEATHER
-          // ========================================
 
           const weatherData =
             await getWeather(
@@ -235,10 +273,12 @@ function Routing({
 
           }
 
-
         } catch (error) {
 
-          console.error(error);
+          console.error(
+            "Weather error:",
+            error
+          );
 
         }
 
@@ -247,7 +287,10 @@ function Routing({
     );
 
 
-    // Remove routing control when component changes
+    // ----------------------------------------------
+    // CLEANUP
+    // ----------------------------------------------
+
     return () => {
 
       try {
@@ -279,10 +322,6 @@ function Routing({
 
     setTime,
 
-    setHospitals,
-
-    setPoliceStations,
-
     setWeather,
 
   ]);
@@ -293,17 +332,23 @@ function Routing({
 
 
 // ==================================================
-// BACKEND ROUTES
-//
-// Draw routes returned by FastAPI.
+// BACKEND ROUTES + ROUTE-BASED EMERGENCY SERVICES
 // ==================================================
 
 function BackendRoutes({
+
   safeRouteData,
+
+  selectedRoute,
+
 }) {
 
   const map = useMap();
 
+
+  // ==================================================
+  // FIT MAP TO ALL ROUTES
+  // ==================================================
 
   useEffect(() => {
 
@@ -312,13 +357,11 @@ function BackendRoutes({
       !safeRouteData.routes ||
       safeRouteData.routes.length === 0
     ) {
+
       return;
+
     }
 
-
-    // ----------------------------------------------
-    // FIT MAP TO ALL BACKEND ROUTES
-    // ----------------------------------------------
 
     const allPoints = [];
 
@@ -331,7 +374,9 @@ function BackendRoutes({
 
 
         if (!coordinates) {
+
           return;
+
         }
 
 
@@ -339,8 +384,11 @@ function BackendRoutes({
           ([longitude, latitude]) => {
 
             allPoints.push([
+
               latitude,
+
               longitude,
+
             ]);
 
           }
@@ -353,21 +401,30 @@ function BackendRoutes({
     if (allPoints.length > 0) {
 
       map.fitBounds(
+
         allPoints,
+
         {
           padding: [30, 30],
         }
+
       );
 
     }
 
 
   }, [
+
     map,
+
     safeRouteData,
+
   ]);
 
 
+  // ==================================================
+  // NO BACKEND DATA
+  // ==================================================
 
   if (
     !safeRouteData ||
@@ -379,18 +436,135 @@ function BackendRoutes({
   }
 
 
+  // ==================================================
+  // DETERMINE WHICH ROUTE SHOULD BE HIGHLIGHTED
+  // ==================================================
+
+  const highlightedRoute =
+    selectedRoute ||
+
+    safeRouteData
+      .recommended_route
+      ?.name;
+
+
+  // ==================================================
+  // COLLECT EMERGENCY SERVICES FROM ALL ROUTES
+  // ==================================================
+
+  const hospitalMap =
+    new Map();
+
+  const policeMap =
+    new Map();
+
+
+  safeRouteData.routes.forEach(
+    (route) => {
+
+      // --------------------------------------------
+      // HOSPITALS
+      // --------------------------------------------
+
+      if (
+        route.hospitals &&
+        Array.isArray(route.hospitals)
+      ) {
+
+        route.hospitals.forEach(
+          (hospital) => {
+
+            const key =
+              `${hospital.type}-${hospital.id}`;
+
+
+            if (
+              !hospitalMap.has(key)
+            ) {
+
+              hospitalMap.set(
+                key,
+                {
+                  ...hospital,
+
+                  routeName:
+                    route.name,
+                }
+              );
+
+            }
+
+          }
+        );
+
+      }
+
+
+      // --------------------------------------------
+      // POLICE
+      // --------------------------------------------
+
+      if (
+        route.police_stations &&
+        Array.isArray(
+          route.police_stations
+        )
+      ) {
+
+        route.police_stations.forEach(
+          (station) => {
+
+            const key =
+              `${station.type}-${station.id}`;
+
+
+            if (
+              !policeMap.has(key)
+            ) {
+
+              policeMap.set(
+                key,
+                {
+                  ...station,
+
+                  routeName:
+                    route.name,
+                }
+              );
+
+            }
+
+          }
+        );
+
+      }
+
+    }
+  );
+
+
+  const routeHospitals =
+    Array.from(
+      hospitalMap.values()
+    );
+
+
+  const routePoliceStations =
+    Array.from(
+      policeMap.values()
+    );
+
 
   return (
 
     <>
 
+      {/* ==========================================
+          ROUTES
+      ========================================== */}
+
       {safeRouteData.routes.map(
         (route, index) => {
-
-
-          // ----------------------------------------
-          // GET OSRM GEOMETRY
-          // ----------------------------------------
 
           const coordinates =
             route.geometry?.coordinates;
@@ -403,7 +577,6 @@ function BackendRoutes({
           }
 
 
-
           // ----------------------------------------
           // OSRM:
           //
@@ -412,8 +585,6 @@ function BackendRoutes({
           // Leaflet:
           //
           // [latitude, longitude]
-          //
-          // Therefore we reverse the order.
           // ----------------------------------------
 
           const positions =
@@ -430,50 +601,58 @@ function BackendRoutes({
             );
 
 
+          // ----------------------------------------
+          // CHECK HIGHLIGHT
+          // ----------------------------------------
+
+          const isHighlighted =
+            highlightedRoute ===
+            route.name;
+
 
           // ----------------------------------------
-          // CHECK IF THIS IS RECOMMENDED ROUTE
+          // CHECK RECOMMENDED
           // ----------------------------------------
 
           const isRecommended =
 
             safeRouteData
               .recommended_route
-              ?.name === route.name;
-
+              ?.name ===
+            route.name;
 
 
           return (
 
             <Polyline
 
-              key={`backend-route-${index}`}
+              key={
+                `backend-route-${index}`
+              }
 
-              positions={positions}
+              positions={
+                positions
+              }
 
 
               pathOptions={{
 
-                // Recommended route = green
-                // Other routes = gray
-
-                color: isRecommended
-                  ? "green"
-                  : "gray",
+                color:
+                  isHighlighted
+                    ? "green"
+                    : "gray",
 
 
-                // Recommended route is thicker
+                weight:
+                  isHighlighted
+                    ? 7
+                    : 4,
 
-                weight: isRecommended
-                  ? 7
-                  : 4,
 
-
-                // Other routes slightly transparent
-
-                opacity: isRecommended
-                  ? 1
-                  : 0.6,
+                opacity:
+                  isHighlighted
+                    ? 1
+                    : 0.55,
 
               }}
 
@@ -498,7 +677,8 @@ function BackendRoutes({
 
                   Safety Score:{" "}
 
-                  {route.safety_score}
+                  {route.safety_score ??
+                    "N/A"}
 
 
                   <br />
@@ -506,7 +686,8 @@ function BackendRoutes({
 
                   Risk Level:{" "}
 
-                  {route.risk_level}
+                  {route.risk_level ??
+                    "N/A"}
 
 
                   <br />
@@ -514,7 +695,10 @@ function BackendRoutes({
 
                   Distance:{" "}
 
-                  {route.distance_km} km
+                  {route.distance_km ??
+                    "N/A"}{" "}
+
+                  km
 
 
                   <br />
@@ -522,7 +706,30 @@ function BackendRoutes({
 
                   Duration:{" "}
 
-                  {route.duration_min} min
+                  {route.duration_min ??
+                    "N/A"}{" "}
+
+                  min
+
+
+                  <br />
+
+
+                  🏥 Hospitals:{" "}
+
+                  {route.hospital_count ??
+                    route.hospitals?.length ??
+                    0}
+
+
+                  <br />
+
+
+                  👮 Police Stations:{" "}
+
+                  {route.police_station_count ??
+                    route.police_stations?.length ??
+                    0}
 
                 </div>
 
@@ -535,6 +742,172 @@ function BackendRoutes({
         }
 
       )}
+
+
+      {/* ==========================================
+          HOSPITAL MARKERS
+      ========================================== */}
+
+      {routeHospitals
+
+        .map(
+          (hospital) => {
+
+            const position =
+              getElementPosition(
+                hospital
+              );
+
+
+            if (!position) {
+
+              return null;
+
+            }
+
+
+            return (
+
+              <Marker
+
+                key={
+                  `route-hospital-${hospital.type}-${hospital.id}`
+                }
+
+                position={
+                  position
+                }
+
+                icon={
+                  hospitalIcon
+                }
+
+              >
+
+                <Popup>
+
+                  <strong>
+
+                    🏥{" "}
+
+                    {
+                      hospital
+                        .tags
+                        ?.name ||
+                      "Unnamed Hospital"
+                    }
+
+                  </strong>
+
+
+                  <br />
+
+
+                  Near:{" "}
+
+                  {
+                    hospital.routeName
+                  }
+
+                  <br />
+
+
+                  <small>
+                    Hospital along analyzed route
+                  </small>
+
+                </Popup>
+
+              </Marker>
+
+            );
+
+          }
+
+        )}
+
+
+      {/* ==========================================
+          POLICE MARKERS
+      ========================================== */}
+
+      {routePoliceStations
+
+        .map(
+          (station) => {
+
+            const position =
+              getElementPosition(
+                station
+              );
+
+
+            if (!position) {
+
+              return null;
+
+            }
+
+
+            return (
+
+              <Marker
+
+                key={
+                  `route-police-${station.type}-${station.id}`
+                }
+
+                position={
+                  position
+                }
+
+                icon={
+                  policeIcon
+                }
+
+              >
+
+                <Popup>
+
+                  <strong>
+
+                    👮{" "}
+
+                    {
+                      station
+                        .tags
+                        ?.name ||
+                      "Police Station"
+                    }
+
+                  </strong>
+
+
+                  <br />
+
+
+                  Near:{" "}
+
+                  {
+                    station.routeName
+                  }
+
+                  <br />
+
+
+                  <small>
+                    Police station along analyzed route
+                  </small>
+
+                </Popup>
+
+              </Marker>
+
+            );
+
+          }
+
+        )}
 
     </>
 
@@ -553,22 +926,15 @@ function MapView({
 
   destinationCoords,
 
-  hospitals = [],
-
-  policeStations = [],
-
-  setHospitals,
-
-  setPoliceStations,
-
   setDistance,
 
   setTime,
 
   setWeather,
 
-  // NEW
   safeRouteData,
+
+  selectedRoute,
 
 }) {
 
@@ -577,17 +943,22 @@ function MapView({
 
     <MapContainer
 
-      center={[10.8505, 76.2711]}
+      center={[
+        10.8505,
+        76.2711,
+      ]}
 
       zoom={8}
 
       style={{
+
         height: "500px",
+
         width: "100%",
+
       }}
 
     >
-
 
       {/* ==========================================
           OPENSTREETMAP
@@ -602,7 +973,6 @@ function MapView({
       />
 
 
-
       {/* ==========================================
           SOURCE
       ========================================== */}
@@ -610,17 +980,20 @@ function MapView({
       {sourceCoords && (
 
         <Marker
-          position={sourceCoords}
+          position={
+            sourceCoords
+          }
         >
 
           <Popup>
+
             📍 Source
+
           </Popup>
 
         </Marker>
 
       )}
-
 
 
       {/* ==========================================
@@ -630,11 +1003,15 @@ function MapView({
       {destinationCoords && (
 
         <Marker
-          position={destinationCoords}
+          position={
+            destinationCoords
+          }
         >
 
           <Popup>
-            📍 Destination
+
+            🏁 Destination
+
           </Popup>
 
         </Marker>
@@ -642,165 +1019,13 @@ function MapView({
       )}
 
 
-
       {/* ==========================================
-          HOSPITALS
-      ========================================== */}
-
-      {hospitals
-
-        .filter((hospital) => {
-
-          const lat =
-            hospital.lat ??
-            hospital.center?.lat;
-
-
-          const lon =
-            hospital.lon ??
-            hospital.center?.lon;
-
-
-          return (
-            lat != null &&
-            lon != null
-          );
-
-        })
-
-
-        .map((hospital) => {
-
-
-          const lat =
-            hospital.lat ??
-            hospital.center?.lat;
-
-
-          const lon =
-            hospital.lon ??
-            hospital.center?.lon;
-
-
-          return (
-
-            <Marker
-
-              key={
-                `hospital-${hospital.type}-${hospital.id}`
-              }
-
-              position={[
-                lat,
-                lon,
-              ]}
-
-              icon={hospitalIcon}
-
-            >
-
-              <Popup>
-
-                <strong>
-
-                  🏥{" "}
-
-                  {hospital.tags?.name ||
-                    "Unnamed Hospital"}
-
-                </strong>
-
-              </Popup>
-
-            </Marker>
-
-          );
-
-        })}
-
-
-
-      {/* ==========================================
-          POLICE STATIONS
-      ========================================== */}
-
-      {policeStations
-
-        .filter((station) => {
-
-          const lat =
-            station.lat ??
-            station.center?.lat;
-
-
-          const lon =
-            station.lon ??
-            station.center?.lon;
-
-
-          return (
-            lat != null &&
-            lon != null
-          );
-
-        })
-
-
-        .map((station) => {
-
-
-          const lat =
-            station.lat ??
-            station.center?.lat;
-
-
-          const lon =
-            station.lon ??
-            station.center?.lon;
-
-
-          return (
-
-            <Marker
-
-              key={
-                `police-${station.type}-${station.id}`
-              }
-
-              position={[
-                lat,
-                lon,
-              ]}
-
-              icon={policeIcon}
-
-            >
-
-              <Popup>
-
-                <strong>
-
-                  👮{" "}
-
-                  {station.tags?.name ||
-                    "Police Station"}
-
-                </strong>
-
-              </Popup>
-
-            </Marker>
-
-          );
-
-        })}
-
-
-
-      {/* ==========================================
-          ORIGINAL FRONTEND ROUTE
-
-          Only show this BEFORE backend analysis.
+          OLD FRONTEND ROUTE
+          
+          This appears only BEFORE backend analysis.
+          
+          Once safeRouteData exists, backend routes
+          replace it.
       ========================================== */}
 
       {sourceCoords &&
@@ -825,14 +1050,6 @@ function MapView({
               setTime
             }
 
-            setHospitals={
-              setHospitals
-            }
-
-            setPoliceStations={
-              setPoliceStations
-            }
-
             setWeather={
               setWeather
             }
@@ -842,12 +1059,15 @@ function MapView({
         )}
 
 
-
       {/* ==========================================
-          FASTAPI ROUTES
+          BACKEND ROUTES
 
-          Once backend analysis finishes,
-          these replace the old blue route.
+          Includes:
+
+          • Alternative routes
+          • Recommended route
+          • Hospitals along routes
+          • Police stations along routes
       ========================================== */}
 
       {safeRouteData && (
@@ -858,10 +1078,13 @@ function MapView({
             safeRouteData
           }
 
+          selectedRoute={
+            selectedRoute
+          }
+
         />
 
       )}
-
 
     </MapContainer>
 

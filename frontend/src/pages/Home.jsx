@@ -1,4 +1,8 @@
-import { useState } from "react";
+import {
+  useState,
+  useEffect,
+} from "react";
+
 
 import Navbar from "../components/Navbar";
 import Hero from "../components/Hero";
@@ -12,135 +16,354 @@ import EmergencySOS from "../components/EmergencySOS";
 import MapLegend from "../components/MapLegend";
 import RouteStatus from "../components/RouteStatus";
 import Footer from "../components/Footer";
+import RouteComparison from "../components/RouteComparison";
 
-// FastAPI connection
+
 import { getSafeRoute } from "../Services/api";
 
 
 function Home() {
 
-  // ==================================================
-  // SOURCE AND DESTINATION TEXT
-  // ==================================================
-
-  const [source, setSource] = useState("");
-  const [destination, setDestination] = useState("");
-
 
   // ==================================================
-  // SOURCE AND DESTINATION COORDINATES
-  //
-  // Format used by RouteForm:
-  // [latitude, longitude]
+  // SOURCE / DESTINATION
   // ==================================================
 
-  const [sourceCoords, setSourceCoords] = useState(null);
-  const [destinationCoords, setDestinationCoords] = useState(null);
+  const [source, setSource] =
+    useState("");
+
+  const [destination, setDestination] =
+    useState("");
+
+
+  // ==================================================
+  // COORDINATES
+  // ==================================================
+
+  const [sourceCoords, setSourceCoords] =
+    useState(null);
+
+  const [destinationCoords, setDestinationCoords] =
+    useState(null);
+
+
+  // ==================================================
+  // SELECTED ROUTE
+  // ==================================================
+
+  const [selectedRoute, setSelectedRoute] =
+    useState(null);
 
 
   // ==================================================
   // ROUTE INFORMATION
   // ==================================================
 
-  const [distance, setDistance] = useState("");
-  const [time, setTime] = useState("");
+  const [distance, setDistance] =
+    useState("");
+
+  const [time, setTime] =
+    useState("");
 
 
   // ==================================================
   // WEATHER
   // ==================================================
 
-  const [weather, setWeather] = useState(null);
+  const [weather, setWeather] =
+    useState(null);
 
 
   // ==================================================
   // EMERGENCY SERVICES
   // ==================================================
 
-  const [hospitals, setHospitals] = useState([]);
-  const [policeStations, setPoliceStations] = useState([]);
+  const [hospitals, setHospitals] =
+    useState([]);
+
+  const [policeStations, setPoliceStations] =
+    useState([]);
 
 
   // ==================================================
-  // BACKEND SAFE ROUTE RESULT
+  // BACKEND RESULT
   // ==================================================
 
-  const [safeRouteData, setSafeRouteData] = useState(null);
-
-  // Used to show loading state
-  const [backendLoading, setBackendLoading] = useState(false);
-
-  // Used to display backend errors
-  const [backendError, setBackendError] = useState("");
+  const [safeRouteData, setSafeRouteData] =
+    useState(null);
 
 
   // ==================================================
-  // GET SAFE ROUTE FROM FASTAPI
+  // BACKEND LOADING / ERROR
+  // ==================================================
+
+  const [backendLoading, setBackendLoading] =
+    useState(false);
+
+  const [backendError, setBackendError] =
+    useState("");
+
+
+  // ==================================================
+  // GET SAFE ROUTE
   // ==================================================
 
   const handleSafeRoute = async () => {
 
-    // Make sure coordinates exist first
-    if (!sourceCoords || !destinationCoords) {
-      alert("Please find a route first.");
+
+    if (
+      !sourceCoords ||
+      !destinationCoords
+    ) {
+
+      alert(
+        "Please find a route first."
+      );
+
       return;
+
     }
+
 
     try {
 
       setBackendLoading(true);
+
       setBackendError("");
 
-      console.log("Sending route to FastAPI...");
-      console.log("Source:", sourceCoords);
-      console.log("Destination:", destinationCoords);
+      // Reset old backend data
+      setSafeRouteData(null);
+
+      // Reset old emergency markers
+      setHospitals([]);
+
+      setPoliceStations([]);
 
 
-      // IMPORTANT:
-      //
-      // RouteForm stores coordinates like:
-      //
-      // [latitude, longitude]
-      //
-      // Therefore:
-      //
-      // [0] = latitude
-      // [1] = longitude
-
-      const result = await getSafeRoute(
-        sourceCoords[0],
-        sourceCoords[1],
-        destinationCoords[0],
-        destinationCoords[1]
+      console.log(
+        "Sending route to FastAPI..."
       );
 
 
       console.log(
-        "Safe route result from FastAPI:",
+        "Source:",
+        sourceCoords
+      );
+
+
+      console.log(
+        "Destination:",
+        destinationCoords
+      );
+
+
+      const result =
+        await getSafeRoute(
+
+          sourceCoords[0],
+
+          sourceCoords[1],
+
+          destinationCoords[0],
+
+          destinationCoords[1]
+
+        );
+
+
+      console.log(
+        "FastAPI response:",
         result
       );
 
 
-      // Store FastAPI result in React
-      setSafeRouteData(result);
+      setSafeRouteData(
+        result
+      );
+
 
     } catch (error) {
 
+
       console.error(
-        "Failed to get safe route:",
+        "Backend error:",
         error
       );
+
+
+      // Show actual backend error
+      if (
+        error.response?.data
+      ) {
+
+        console.error(
+          "Backend response:",
+          error.response.data
+        );
+
+      }
+
 
       setBackendError(
         "Unable to analyze the route using the backend."
       );
+
 
     } finally {
 
       setBackendLoading(false);
 
     }
+
   };
+
+
+  // ==================================================
+  // GET EMERGENCY SERVICES FROM BACKEND ROUTES
+  // ==================================================
+
+  useEffect(() => {
+
+
+    if (
+      !safeRouteData?.routes
+    ) {
+
+      return;
+
+    }
+
+
+    const hospitalMap =
+      new Map();
+
+
+    const policeMap =
+      new Map();
+
+
+    safeRouteData.routes.forEach(
+
+      (route) => {
+
+
+        // --------------------------------------------
+        // HOSPITALS
+        // --------------------------------------------
+
+        if (
+          Array.isArray(
+            route.hospitals
+          )
+        ) {
+
+
+          route.hospitals.forEach(
+
+            (hospital) => {
+
+
+              const key =
+                `${hospital.type}-${hospital.id}`;
+
+
+              if (
+                !hospitalMap.has(key)
+              ) {
+
+                hospitalMap.set(
+                  key,
+                  hospital
+                );
+
+              }
+
+            }
+
+          );
+
+        }
+
+
+        // --------------------------------------------
+        // POLICE
+        // --------------------------------------------
+
+        if (
+          Array.isArray(
+            route.police_stations
+          )
+        ) {
+
+
+          route.police_stations.forEach(
+
+            (station) => {
+
+
+              const key =
+                `${station.type}-${station.id}`;
+
+
+              if (
+                !policeMap.has(key)
+              ) {
+
+                policeMap.set(
+                  key,
+                  station
+                );
+
+              }
+
+            }
+
+          );
+
+        }
+
+      }
+
+    );
+
+
+    const routeHospitals =
+      Array.from(
+        hospitalMap.values()
+      );
+
+
+    const routePolice =
+      Array.from(
+        policeMap.values()
+      );
+
+
+    console.log(
+      "Hospitals along routes:",
+      routeHospitals.length
+    );
+
+
+    console.log(
+      "Police stations along routes:",
+      routePolice.length
+    );
+
+
+    setHospitals(
+      routeHospitals
+    );
+
+
+    setPoliceStations(
+      routePolice
+    );
+
+
+  }, [
+    safeRouteData
+  ]);
 
 
   // ==================================================
@@ -148,7 +371,9 @@ function Home() {
   // ==================================================
 
   return (
+
     <>
+
 
       <Navbar />
 
@@ -156,238 +381,355 @@ function Home() {
 
 
       {/* ==========================================
-          EXISTING ROUTE FORM
+          ROUTE FORM
       ========================================== */}
 
       <RouteForm
+
         source={source}
+
         setSource={setSource}
 
         destination={destination}
+
         setDestination={setDestination}
 
         setSourceCoords={setSourceCoords}
-        setDestinationCoords={setDestinationCoords}
+
+        setDestinationCoords={
+          setDestinationCoords
+        }
+
       />
 
 
       {/* ==========================================
-          EXISTING ROUTE STATUS
+          ROUTE STATUS
       ========================================== */}
 
       <RouteStatus
-        sourceCoords={sourceCoords}
-        destinationCoords={destinationCoords}
-        distance={distance}
+
+        sourceCoords={
+          sourceCoords
+        }
+
+        destinationCoords={
+          destinationCoords
+        }
+
+        distance={
+          distance
+        }
+
       />
 
 
       {/* ==========================================
-          EXISTING MAP
+          MAP
       ========================================== */}
 
       <MapView
-  sourceCoords={sourceCoords}
-  destinationCoords={destinationCoords}
 
-  hospitals={hospitals}
-  policeStations={policeStations}
+        sourceCoords={
+          sourceCoords
+        }
 
-  setHospitals={setHospitals}
-  setPoliceStations={setPoliceStations}
+        destinationCoords={
+          destinationCoords
+        }
 
-  setDistance={setDistance}
-  setTime={setTime}
+        setDistance={
+          setDistance
+        }
 
-  setWeather={setWeather}
+        setTime={
+          setTime
+        }
 
-  safeRouteData={safeRouteData}
-/>
+        setWeather={
+          setWeather
+        }
+
+        safeRouteData={
+          safeRouteData
+        }
+
+        selectedRoute={
+          selectedRoute
+        }
+
+      />
 
 
       <MapLegend />
 
 
       {/* ==========================================
-          EXISTING ROUTE INFORMATION
+          ROUTE INFORMATION
       ========================================== */}
 
       <RouteInfo
-        distance={distance}
-        time={time}
+
+        distance={
+          distance
+        }
+
+        time={
+          time
+        }
+
       />
 
 
       {/* ==========================================
-          EXISTING WEATHER
+          WEATHER
       ========================================== */}
 
       <WeatherInfo
-        weather={weather}
+
+        weather={
+          weather
+        }
+
       />
 
 
       {/* ==========================================
-          EXISTING SAFETY SCORE
+          SAFETY
       ========================================== */}
 
       <SafetyScore
-        weather={weather}
-        hospitals={hospitals}
-        policeStations={policeStations}
+
+        weather={
+          weather
+        }
+
+        hospitals={
+          hospitals
+        }
+
+        policeStations={
+          policeStations
+        }
+
       />
 
 
       {/* ==========================================
-          TEMPORARY BACKEND CONNECTION
-
-          Only appears after source and
-          destination coordinates exist.
+          BACKEND BUTTON
       ========================================== */}
 
-      {sourceCoords && destinationCoords && (
+      {
+        sourceCoords &&
+        destinationCoords && (
 
-        <div
-          style={{
-            textAlign: "center",
-            margin: "25px"
-          }}
-        >
+          <div
+            style={{
+              textAlign:
+                "center",
 
-          <button
-            onClick={handleSafeRoute}
-            disabled={backendLoading}
+              margin:
+                "25px",
+            }}
           >
 
-            {backendLoading
-              ? "Analyzing Route..."
-              : "Analyze Route with Backend"}
+            <button
 
-          </button>
+              onClick={
+                handleSafeRoute
+              }
 
-        </div>
+              disabled={
+                backendLoading
+              }
 
-      )}
+            >
 
+              {
+                backendLoading
 
-      {/* ==========================================
-          BACKEND ERROR
-      ========================================== */}
+                  ? "Analyzing Route..."
 
-      {backendError && (
+                  : "Analyze Route with Backend"
 
-        <div
-          style={{
-            textAlign: "center",
-            margin: "20px"
-          }}
-        >
+              }
 
-          <p>{backendError}</p>
+            </button>
 
-        </div>
+          </div>
 
-      )}
+        )
+      }
 
 
       {/* ==========================================
-          BACKEND RESULT
-
-          Temporary display so we can SEE that
-          React received data from FastAPI.
+          ERROR
       ========================================== */}
 
-      {safeRouteData && (
+      {
+        backendError && (
 
-        <div
-          style={{
-            textAlign: "center",
-            margin: "25px"
-          }}
-        >
+          <div
+            style={{
+              textAlign:
+                "center",
 
-          <h2>
-            Backend Route Analysis
-          </h2>
+              margin:
+                "20px",
 
+              color:
+                "red",
+            }}
+          >
 
-          <p>
-            Routes Found:{" "}
-            {safeRouteData.total_routes}
-          </p>
+            <p>
+              {backendError}
+            </p>
 
+          </div>
 
-          {safeRouteData.recommended_route && (
-
-            <>
-
-              <h3>
-                Recommended Route
-              </h3>
-
-
-              <p>
-                {
-                  safeRouteData
-                    .recommended_route
-                    .name
-                }
-              </p>
-
-
-              <p>
-                Safety Score:{" "}
-                {
-                  safeRouteData
-                    .recommended_route
-                    .safety_score
-                }
-              </p>
-
-
-              <p>
-                Risk Level:{" "}
-                {
-                  safeRouteData
-                    .recommended_route
-                    .risk_level
-                }
-              </p>
-
-
-              <p>
-                Distance:{" "}
-                {
-                  safeRouteData
-                    .recommended_route
-                    .distance_km
-                }{" "}
-                km
-              </p>
-
-
-              <p>
-                Duration:{" "}
-                {
-                  safeRouteData
-                    .recommended_route
-                    .duration_min
-                }{" "}
-                minutes
-              </p>
-
-            </>
-
-          )}
-
-        </div>
-
-      )}
+        )
+      }
 
 
       {/* ==========================================
-          EXISTING COMPONENTS
+          BACKEND ANALYSIS
       ========================================== */}
+
+      {
+        safeRouteData && (
+
+          <div
+            style={{
+              textAlign:
+                "center",
+
+              margin:
+                "25px",
+            }}
+          >
+
+            <h2>
+              Backend Route Analysis
+            </h2>
+
+
+            <p>
+              Routes Found:{" "}
+
+              {
+                safeRouteData.total_routes
+              }
+
+            </p>
+
+
+            {
+              safeRouteData
+                .recommended_route && (
+
+                <>
+
+                  <h3>
+                    Recommended Route
+                  </h3>
+
+
+                  <p>
+
+                    {
+                      safeRouteData
+                        .recommended_route
+                        .name
+                    }
+
+                  </p>
+
+
+                  <p>
+
+                    Safety Score:{" "}
+
+                    {
+                      safeRouteData
+                        .recommended_route
+                        .safety_score
+                    }
+
+                  </p>
+
+
+                  <p>
+
+                    Risk Level:{" "}
+
+                    {
+                      safeRouteData
+                        .recommended_route
+                        .risk_level
+                    }
+
+                  </p>
+
+
+                  <p>
+
+                    Distance:{" "}
+
+                    {
+                      safeRouteData
+                        .recommended_route
+                        .distance_km
+                    }{" "}
+                    km
+
+                  </p>
+
+
+                  <p>
+
+                    Duration:{" "}
+
+                    {
+                      safeRouteData
+                        .recommended_route
+                        .duration_min
+                    }{" "}
+                    minutes
+
+                  </p>
+
+                </>
+
+              )
+            }
+
+          </div>
+
+        )
+      }
+
+
+      {/* ==========================================
+          ROUTE COMPARISON
+      ========================================== */}
+
+      <RouteComparison
+
+        safeRouteData={
+          safeRouteData
+        }
+
+        selectedRoute={
+          selectedRoute
+        }
+
+        setSelectedRoute={
+          setSelectedRoute
+        }
+
+      />
+
 
       <EmergencySOS />
 
@@ -395,8 +737,11 @@ function Home() {
 
       <Footer />
 
+
     </>
+
   );
+
 }
 
 
