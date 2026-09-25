@@ -1,8 +1,11 @@
+import { Box, Stack, Typography } from "@mui/material";
+
+// WMO weather codes (Open-Meteo) → readable condition.
 const getWeatherCondition = (code) => {
-  if (code === 0) return "☀️ Clear Sky";
+  if (code === 0) return "☀️ Clear sky";
 
   if (code === 1 || code === 2) {
-    return "🌤️ Partly Cloudy";
+    return "🌤️ Partly cloudy";
   }
 
   if (code === 3) {
@@ -26,7 +29,7 @@ const getWeatherCondition = (code) => {
   }
 
   if (code >= 80 && code <= 82) {
-    return "🌧️ Rain Showers";
+    return "🌧️ Rain showers";
   }
 
   if (code >= 95) {
@@ -36,44 +39,66 @@ const getWeatherCondition = (code) => {
   return "Unknown";
 };
 
+function Stat({ label, value }) {
+  return (
+    <Box>
+      <Typography variant="caption" color="text.secondary">
+        {label}
+      </Typography>
+      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        {value}
+      </Typography>
+    </Box>
+  );
+}
+
 function WeatherInfo({ weather }) {
   if (!weather) {
-    return null;
+    return (
+      <Typography variant="body2" color="text.secondary">
+        Weather information is unavailable right now.
+      </Typography>
+    );
   }
 
+  const show = (value, unit) => (value == null ? "–" : `${value}${unit}`);
+
   return (
-    <div
-      style={{
-        maxWidth: "600px",
-        margin: "20px auto",
-        padding: "20px",
-        borderRadius: "10px",
-        backgroundColor: "#f5f5f5",
-        textAlign: "center",
-      }}
-    >
-      <h2>🌦️ Weather Conditions</h2>
-
-      <p>
-        🌡️ <strong>Temperature:</strong>{" "}
-        {weather.temperature_2m} °C
-      </p>
-
-      <p>
-        <strong>Condition:</strong>{" "}
+    <Box>
+      <Typography sx={{ fontWeight: 600, mb: 1.5 }}>
         {getWeatherCondition(weather.weather_code)}
-      </p>
+        <Typography component="span" color="text.secondary" sx={{ ml: 1, fontSize: 14 }}>
+          {weather.is_day ? "Daytime" : "After dark"}
+        </Typography>
+      </Typography>
 
-      <p>
-        🌧️ <strong>Precipitation:</strong>{" "}
-        {weather.precipitation} mm
-      </p>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
+          gap: 1.5,
+        }}
+      >
+        <Stat label="Temperature" value={show(weather.temperature, " °C")} />
+        <Stat label="Feels like" value={show(weather.apparent_temperature, " °C")} />
+        <Stat label="Precipitation" value={show(weather.precipitation, " mm")} />
+        <Stat label="Wind" value={show(weather.wind_speed, " km/h")} />
+        <Stat
+          label="Visibility"
+          value={
+            weather.visibility == null
+              ? "–"
+              : `${(weather.visibility / 1000).toFixed(weather.visibility < 10000 ? 1 : 0)} km`
+          }
+        />
+      </Box>
 
-      <p>
-        💨 <strong>Wind Speed:</strong>{" "}
-        {weather.wind_speed_10m} km/h
-      </p>
-    </div>
+      <Stack sx={{ mt: 1.5 }}>
+        <Typography variant="caption" color="text.secondary">
+          Current conditions along the route, from Open-Meteo.
+        </Typography>
+      </Stack>
+    </Box>
   );
 }
 

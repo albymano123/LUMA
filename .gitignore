@@ -11,3 +11,11 @@ __pycache__/
 # Node
 node_modules/
 frontend/node_modules/
+
+# ML: trained models and generated tables are local artefacts
+backend/ml/models/
+backend/ml/training_windows.csv*
+# Geo data: raw downloads and the built database are generated, not committed
+backend/data/raw/
+backend/data/*.sqlite
+backend/data/*.sqlite-*

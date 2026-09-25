@@ -1,11 +1,217 @@
+"""
+Route generation.
+
+OSRM only returns 1-3 alternatives (often just 1-2 in cities), so to
+offer 3-5 genuinely different choices we also ask for routes forced
+through "via" points placed either side of the direct line, then drop
+anything that is a near-duplicate, a large detour, or doubles back on
+itself.
+"""
+
+import asyncio
+import logging
+import math
+
 import httpx
+import numpy as np
+
+from cache import TTLCache
+from geo import (
+    bearing_rad,
+    distance_matrix_m,
+    haversine_m,
+    offset_point,
+    resample_line,
+    route_overlap,
+)
+
+
+logger = logging.getLogger("lumapath.routing")
 
 
 # ==================================================
-# OSRM ROUTING SERVER
+# OSRM SERVERS
+# ==================================================
+#
+# router.project-osrm.org only has a car profile, so walking
+# and cycling routes come from the FOSSGIS servers, which run
+# separate foot / bike / car OSRM instances.
+#
 # ==================================================
 
-OSRM_URL = "https://router.project-osrm.org/route/v1/driving"
+OSRM_PROFILES = {
+    "walking": [
+        "https://routing.openstreetmap.de/routed-foot/route/v1/driving",
+    ],
+    "cycling": [
+        "https://routing.openstreetmap.de/routed-bike/route/v1/driving",
+    ],
+    "driving": [
+        "https://routing.openstreetmap.de/routed-car/route/v1/driving",
+        "https://router.project-osrm.org/route/v1/driving",
+    ],
+}
+
+TRAVEL_MODES = tuple(OSRM_PROFILES)
+
+MAX_ROUTES = 5
+
+# A via-route is only worth offering if it is not much longer
+# than the shortest route found.
+MAX_DETOUR_RATIO = 1.6
+
+# Routes sharing more than this share of their path are treated
+# as the same route.
+MAX_OVERLAP = 0.8
+
+_route_cache = TTLCache(ttl_seconds=600)
+
+# Be polite to the free OSRM servers.
+_osrm_slots = asyncio.Semaphore(3)
+
+
+class RoutingError(Exception):
+    pass
+
+
+# ==================================================
+# SINGLE OSRM REQUEST
+# ==================================================
+
+async def _request_osrm(client, mode, waypoints, alternatives):
+    """
+    waypoints: list of (lat, lon)
+    Returns the raw OSRM route list, or [] if the request failed.
+    """
+
+    coordinates = ";".join(
+        f"{lon:.6f},{lat:.6f}"
+        for lat, lon in waypoints
+    )
+
+    params = {
+        "alternatives": str(alternatives).lower()
+        if isinstance(alternatives, bool)
+        else str(alternatives),
+        "overview": "full",
+        "geometries": "geojson",
+        # steps=true is needed for OSRM to fill in the road-name
+        # summary we use to label each route.
+        "steps": "true",
+    }
+
+    last_error = None
+
+    for base_url in OSRM_PROFILES[mode]:
+
+        try:
+            async with _osrm_slots:
+                response = await client.get(
+                    f"{base_url}/{coordinates}",
+                    params=params,
+                )
+
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("code") != "Ok":
+                last_error = data.get("message") or data.get("code")
+                continue
+
+            return data.get("routes", [])
+
+        except (httpx.HTTPError, ValueError) as error:
+            last_error = error
+            logger.warning("OSRM request failed on %s: %s", base_url, error)
+
+    logger.warning("All OSRM servers failed: %s", last_error)
+
+    return []
+
+
+# ==================================================
+# FORMAT ONE ROUTE
+# ==================================================
+
+def _format_route(osrm_route, via=None):
+
+    summaries = [
+        leg.get("summary", "").strip()
+        for leg in osrm_route.get("legs", [])
+    ]
+
+    road_names = []
+
+    for summary in summaries:
+        for name in summary.split(","):
+            name = name.strip()
+            if name and name not in road_names:
+                road_names.append(name)
+
+    return {
+        "distance_km": round(osrm_route["distance"] / 1000, 2),
+        "duration_min": round(osrm_route["duration"] / 60, 1),
+        "geometry": osrm_route["geometry"],
+        "via_roads": road_names[:2],
+        "generated_via_point": via is not None,
+    }
+
+
+# ==================================================
+# ROUTE QUALITY CHECKS
+# ==================================================
+
+def _doubles_back(coordinates):
+    """
+    True when a route walks down a road and comes back the same way,
+    which is what happens when a via point lands on a dead end.
+    """
+
+    samples = resample_line(coordinates, spacing_m=40, max_points=400)
+
+    if len(samples) < 20:
+        return False
+
+    distances = distance_matrix_m(samples, samples)
+    index = np.arange(len(samples))
+
+    # Only compare points that are far apart along the route.
+    far_along_route = np.abs(index[:, None] - index[None, :]) > 8
+
+    revisited = (
+        (distances < 20) & far_along_route
+    ).any(axis=1)
+
+    return revisited.mean() > 0.08
+
+
+def _via_candidates(source, destination):
+    """
+    Via points either side of the direct line at the midpoint,
+    at two different distances, nearest first.
+    """
+
+    straight_m = haversine_m(*source, *destination)
+
+    mid_lat = (source[0] + destination[0]) / 2
+    mid_lon = (source[1] + destination[1]) / 2
+
+    heading = bearing_rad(*source, *destination)
+
+    candidates = []
+
+    for fraction in (0.18, 0.32):
+        for side in (1, -1):
+            candidates.append(
+                offset_point(
+                    mid_lat,
+                    mid_lon,
+                    heading + side * math.pi / 2,
+                    straight_m * fraction,
+                )
+            )
+
+    return candidates
 
 
 # ==================================================
@@ -16,166 +222,113 @@ async def get_alternative_routes(
     source_lat,
     source_lon,
     destination_lat,
-    destination_lon
+    destination_lon,
+    mode="walking",
 ):
 
-    # ------------------------------------------------
-    # OSRM expects coordinates in this order:
-    #
-    # longitude,latitude
-    #
-    # NOT latitude,longitude
-    # ------------------------------------------------
+    if mode not in OSRM_PROFILES:
+        raise RoutingError(f"Unsupported travel mode: {mode}")
 
-    coordinates = (
-        f"{source_lon},{source_lat};"
-        f"{destination_lon},{destination_lat}"
+    cache_key = (
+        mode,
+        round(source_lat, 5),
+        round(source_lon, 5),
+        round(destination_lat, 5),
+        round(destination_lon, 5),
     )
 
+    cached = _route_cache.get(cache_key)
 
-    # Example:
-    #
-    # https://router.project-osrm.org/route/v1/driving/
-    # 76.2,10.5;76.3,10.6
+    if cached is not None:
+        return cached
 
-    url = f"{OSRM_URL}/{coordinates}"
-
-
-    # ------------------------------------------------
-    # OSRM OPTIONS
-    # ------------------------------------------------
-
-    params = {
-
-        # Ask OSRM for alternative routes
-        "alternatives": "true",
-
-        # Return complete route geometry
-        "overview": "full",
-
-        # Return geometry as GeoJSON
-        "geometries": "geojson",
-
-        # We don't currently need turn-by-turn steps
-        "steps": "false"
-    }
-
-
-    # ------------------------------------------------
-    # SEND REQUEST TO OSRM
-    # ------------------------------------------------
+    source = (source_lat, source_lon)
+    destination = (destination_lat, destination_lon)
 
     async with httpx.AsyncClient(
-        timeout=30.0
+        timeout=25.0,
+        headers={"User-Agent": "LumaPath/1.0 (safety-aware routing)"},
     ) as client:
 
-        response = await client.get(
-            url,
-            params=params
+        via_points = _via_candidates(source, destination)
+
+        results = await asyncio.gather(
+            _request_osrm(client, mode, [source, destination], 3),
+            *[
+                _request_osrm(client, mode, [source, via, destination], False)
+                for via in via_points
+            ],
         )
 
-        # Raise error if OSRM request failed
-        response.raise_for_status()
+    direct_routes = [
+        _format_route(route) for route in results[0]
+    ]
 
-        data = response.json()
+    via_routes = [
+        _format_route(routes[0], via=via)
+        for via, routes in zip(via_points, results[1:])
+        if routes
+    ]
 
+    if not direct_routes and not via_routes:
+        raise RoutingError(
+            "No route could be found between these locations."
+        )
 
-    # ==================================================
-    # DEBUG INFORMATION
-    #
-    # This allows us to see EXACTLY how many routes
-    # OSRM itself returned.
-    # ==================================================
-
-    osrm_routes = data.get(
-        "routes",
-        []
+    # OSRM's own alternatives come first, then generated ones.
+    candidates = direct_routes + sorted(
+        via_routes,
+        key=lambda route: route["duration_min"],
     )
 
+    shortest_km = min(route["distance_km"] for route in candidates)
 
-    print("\n")
-    print("=" * 50)
-    print("LUMAPATH - OSRM ROUTING DEBUG")
-    print("=" * 50)
+    selected = []
+    selected_samples = []
 
-    print(
-        "OSRM Status:",
-        data.get("code")
+    for route in candidates:
+
+        if len(selected) >= MAX_ROUTES:
+            break
+
+        if route["distance_km"] > shortest_km * MAX_DETOUR_RATIO:
+            continue
+
+        coordinates = route["geometry"]["coordinates"]
+
+        if route["generated_via_point"] and _doubles_back(coordinates):
+            continue
+
+        samples = resample_line(coordinates, spacing_m=80, max_points=300)
+
+        is_duplicate = any(
+            route_overlap(samples, existing) > MAX_OVERLAP
+            and route_overlap(existing, samples) > MAX_OVERLAP
+            for existing in selected_samples
+        )
+
+        if is_duplicate:
+            continue
+
+        selected.append(route)
+        selected_samples.append(samples)
+
+    # Stable, human-friendly ids: fastest first.
+    selected.sort(key=lambda route: route["duration_min"])
+
+    for index, route in enumerate(selected):
+        route["id"] = f"route-{index + 1}"
+        route["name"] = f"Route {chr(ord('A') + index)}"
+        route["mode"] = mode
+
+    logger.info(
+        "Routing (%s): %d OSRM alternatives, %d via routes, %d kept",
+        mode,
+        len(direct_routes),
+        len(via_routes),
+        len(selected),
     )
 
-    print(
-        "Routes returned by OSRM:",
-        len(osrm_routes)
-    )
+    _route_cache.set(cache_key, selected)
 
-
-    # Print basic information about every route
-    for index, route in enumerate(
-        osrm_routes
-    ):
-
-        distance_km = round(
-            route["distance"] / 1000,
-            2
-        )
-
-        duration_min = round(
-            route["duration"] / 60,
-            1
-        )
-
-        print(
-            f"Route {index + 1}: "
-            f"{distance_km} km | "
-            f"{duration_min} min"
-        )
-
-
-    print("=" * 50)
-    print("\n")
-
-
-    # ==================================================
-    # CONVERT OSRM DATA INTO OUR LUMAPATH FORMAT
-    # ==================================================
-
-    routes = []
-
-
-    for index, route in enumerate(
-        osrm_routes
-    ):
-
-        routes.append({
-
-            # Route name
-            "name": f"Route {index + 1}",
-
-
-            # OSRM distance is in meters.
-            # Convert meters → kilometers.
-            "distance_km": round(
-                route["distance"] / 1000,
-                2
-            ),
-
-
-            # OSRM duration is in seconds.
-            # Convert seconds → minutes.
-            "duration_min": round(
-                route["duration"] / 60,
-                1
-            ),
-
-
-            # Full road geometry used by Leaflet
-            "geometry": route["geometry"]
-
-        })
-
-
-    # ==================================================
-    # RETURN ALL ROUTES
-    # ==================================================
-
-    return routes
+    return selected

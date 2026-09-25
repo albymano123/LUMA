@@ -1,9 +1,41 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+import logging
+import os
+import sys
+import time
+from typing import Literal
 
-from routing_service import get_alternative_routes
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from cache import TTLCache
+from geo import haversine_m
+from geocoding_service import reverse_geocode, search_places
 from route_analyzer import analyze_all_routes
+from routing_service import RoutingError, get_alternative_routes
+
+
+# ==================================================
+# LOGGING
+# ==================================================
+#
+# Logs never include users' coordinates or search text.
+# Force UTF-8 so non-ASCII place names cannot crash logging on
+# Windows consoles that default to cp1252.
+#
+# ==================================================
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    stream=sys.stdout,
+)
+
+logger = logging.getLogger("lumapath")
 
 
 # ==================================================
@@ -12,8 +44,8 @@ from route_analyzer import analyze_all_routes
 
 app = FastAPI(
     title="LumaPath API",
-    description="AI-Powered Safety Navigation Backend",
-    version="1.0.0"
+    description="Safety-aware route recommendations",
+    version="2.0.0"
 )
 
 
@@ -21,33 +53,73 @@ app = FastAPI(
 # CORS
 # ==================================================
 #
-# React/Vite runs on localhost:5173 normally.
-#
-# We allow both localhost and 127.0.0.1 because
-# browsers treat them as different origins.
+# Set ALLOWED_ORIGINS (comma-separated) in production.
+# The defaults cover the Vite dev server.
 #
 # ==================================================
 
+DEFAULT_ORIGINS = (
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:4173,http://127.0.0.1:4173"
+)
+
 app.add_middleware(
     CORSMiddleware,
-
     allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
+        origin.strip()
+        for origin in os.getenv("ALLOWED_ORIGINS", DEFAULT_ORIGINS).split(",")
+        if origin.strip()
     ],
-
-    allow_credentials=True,
-
-    allow_methods=["*"],
-
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+# ==================================================
+# RATE LIMITING
+# ==================================================
+#
+# Each route request fans out to several free public services
+# that will block us if we flood them. A simple per-client
+# window is enough for a single-instance deployment.
+#
+# ==================================================
+
+RATE_LIMITS = {
+    "/safe-route": (10, 60),         # 10 requests per minute
+    "/geocode/search": (60, 60),     # typing is bursty
+    "/geocode/reverse": (20, 60),
+}
+
+_request_log = TTLCache(ttl_seconds=120, max_items=5000)
+
+
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+
+    limit = RATE_LIMITS.get(request.url.path)
+
+    if limit and request.method != "OPTIONS":
+        max_requests, window = limit
+        client = request.client.host if request.client else "unknown"
+        key = (client, request.url.path)
+        now = time.monotonic()
+
+        recent = [
+            t for t in (_request_log.get(key) or [])
+            if now - t < window
+        ]
+
+        if len(recent) >= max_requests:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": {"message": "Too many requests. Please wait a moment and try again."}},
+            )
+
+        recent.append(now)
+        _request_log.set(key, recent)
+
+    return await call_next(request)
 
 
 # ==================================================
@@ -56,17 +128,22 @@ app.add_middleware(
 
 class RouteRequest(BaseModel):
 
-    source_lat: float
+    source_lat: float = Field(ge=-90, le=90)
+    source_lon: float = Field(ge=-180, le=180)
+    destination_lat: float = Field(ge=-90, le=90)
+    destination_lon: float = Field(ge=-180, le=180)
+    mode: Literal["walking", "cycling", "driving"] = "walking"
 
-    source_lon: float
 
-    destination_lat: float
-
-    destination_lon: float
+MAX_TRIP_KM = {
+    "walking": 40,
+    "cycling": 120,
+    "driving": 400,
+}
 
 
 # ==================================================
-# ROOT
+# ROOT / HEALTH
 # ==================================================
 
 @app.get("/")
@@ -78,16 +155,37 @@ async def root():
     }
 
 
-# ==================================================
-# HEALTH CHECK
-# ==================================================
-
 @app.get("/health")
 async def health():
 
     return {
         "status": "healthy"
     }
+
+
+# ==================================================
+# PLACE SEARCH
+# ==================================================
+
+@app.get("/geocode/search")
+async def geocode_search(
+    q: str = Query(min_length=1, max_length=200),
+    lat: float | None = Query(default=None, ge=-90, le=90),
+    lon: float | None = Query(default=None, ge=-180, le=180),
+):
+
+    return {
+        "results": await search_places(q, lat, lon)
+    }
+
+
+@app.get("/geocode/reverse")
+async def geocode_reverse(
+    lat: float = Query(ge=-90, le=90),
+    lon: float = Query(ge=-180, le=180),
+):
+
+    return await reverse_geocode(lat, lon)
 
 
 # ==================================================
@@ -99,249 +197,79 @@ async def safe_route(
     request: RouteRequest
 ):
 
-    print()
-    print(
-        "======================================"
-    )
-
-    print(
-        "LUMAPATH SAFE ROUTE REQUEST"
-    )
-
-    print(
-        "======================================"
-    )
-
-    print(
-        "Source:",
+    straight_km = haversine_m(
         request.source_lat,
-        request.source_lon
-    )
-
-    print(
-        "Destination:",
+        request.source_lon,
         request.destination_lat,
-        request.destination_lon
-    )
+        request.destination_lon,
+    ) / 1000
 
+    if straight_km < 0.05:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Start and destination are the same place."},
+        )
 
-    # ==================================================
-    # GET ROUTES FROM OSRM
-    # ==================================================
+    if straight_km > MAX_TRIP_KM[request.mode]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": (
+                    f"This trip is too long for {request.mode} "
+                    f"(limit {MAX_TRIP_KM[request.mode]} km). "
+                    "Try a different travel mode or a closer destination."
+                )
+            },
+        )
+
+    started = time.monotonic()
 
     try:
-
         routes = await get_alternative_routes(
-
             request.source_lat,
-
             request.source_lon,
-
             request.destination_lat,
-
-            request.destination_lon
-
+            request.destination_lon,
+            mode=request.mode,
         )
 
-    except Exception as error:
-
-        print(
-            "OSRM routing error:",
-            error
-        )
-
+    except RoutingError as error:
         raise HTTPException(
-
-            status_code=500,
-
-            detail={
-                "message":
-                "Unable to calculate routes",
-
-                "error":
-                str(error)
-            }
-
-        )
-
-
-    # ==================================================
-    # CHECK ROUTES
-    # ==================================================
-
-    if not routes:
-
-        raise HTTPException(
-
             status_code=404,
-
-            detail={
-                "message":
-                "No routes found"
-            }
-
+            detail={"message": str(error)},
         )
 
+    except Exception:
+        logger.exception("Routing failed")
 
-    print(
-        "Routes returned by OSRM:",
-        len(routes)
-    )
-
-
-    # ==================================================
-    # ANALYZE EACH ROUTE
-    #
-    # This is where:
-    #
-    # Route geometry
-    #       ↓
-    # Hospitals along route
-    # Police stations along route
-    # Weather
-    # Safety score
-    #
-    # are calculated.
-    # ==================================================
+        raise HTTPException(
+            status_code=502,
+            detail={"message": "The routing service is unavailable right now. Please try again shortly."},
+        )
 
     try:
+        result = await analyze_all_routes(routes, mode=request.mode)
 
-        analyzed_routes = (
-
-            await analyze_all_routes(
-                routes
-            )
-
-        )
-
-    except Exception as error:
-
-        print(
-            "Route analysis error:",
-            error
-        )
+    except Exception:
+        logger.exception("Route analysis failed")
 
         raise HTTPException(
-
             status_code=500,
-
-            detail={
-                "message":
-                "Unable to analyze routes",
-
-                "error":
-                str(error)
-            }
-
+            detail={"message": "Unable to analyse routes right now. Please try again."},
         )
 
-
-    # ==================================================
-    # FIND SAFEST ROUTE
-    # ==================================================
-
-    if not analyzed_routes:
-
-        raise HTTPException(
-
-            status_code=404,
-
-            detail={
-                "message":
-                "No analyzed routes available"
-            }
-
-        )
-
-
-    # Highest safety score is recommended.
-    #
-    # If two routes have the same score,
-    # shorter distance is preferred.
-    #
-    recommended_route = max(
-
-        analyzed_routes,
-
-        key=lambda route: (
-
-            route.get(
-                "safety_score",
-                0
-            ),
-
-            -route.get(
-                "distance_km",
-                float("inf")
-            )
-
-        )
-
+    logger.info(
+        "safe-route (%s): %d routes in %.1fs",
+        request.mode,
+        len(result["routes"]),
+        time.monotonic() - started,
     )
-
-
-    print()
-    print(
-        "RECOMMENDED ROUTE:"
-    )
-
-    print(
-        recommended_route["name"]
-    )
-
-    print(
-        "Safety Score:",
-        recommended_route.get(
-            "safety_score"
-        )
-    )
-
-    print(
-        "Risk Level:",
-        recommended_route.get(
-            "risk_level"
-        )
-    )
-
-    print(
-        "Hospitals:",
-        recommended_route.get(
-            "hospital_count",
-            0
-        )
-    )
-
-    print(
-        "Police Stations:",
-        recommended_route.get(
-            "police_station_count",
-            0
-        )
-    )
-
-
-    print(
-        "======================================"
-    )
-
-
-    # ==================================================
-    # RESPONSE
-    # ==================================================
 
     return {
-
         "success": True,
-
-        "total_routes":
-        len(analyzed_routes),
-
-        "routes":
-        analyzed_routes,
-
-        "recommended_route":
-        recommended_route
-
+        "mode": request.mode,
+        "total_routes": len(result["routes"]),
+        **result,
     }
 
 
@@ -354,13 +282,8 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-
         "main:app",
-
-        host="0.0.0.0",
-
-        port=8000,
-
+        host=os.getenv("HOST", "127.0.0.1"),
+        port=int(os.getenv("PORT", "8000")),
         reload=True
-
     )

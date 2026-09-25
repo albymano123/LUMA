@@ -1,918 +1,180 @@
-import { useEffect } from "react";
+import { Fragment, useEffect, useMemo } from "react";
 
 import {
   MapContainer,
-  TileLayer,
   Marker,
-  Popup,
   Polyline,
+  Popup,
+  TileLayer,
+  Tooltip,
   useMap,
 } from "react-leaflet";
 
 import L from "leaflet";
-import "leaflet/dist/leaflet.css";
 
-import "leaflet-routing-machine";
-import "leaflet-routing-machine/dist/leaflet-routing-machine.css";
-
-import { getWeather } from "../Services/weatherService";
+import { routeColors } from "../theme";
+import { formatDistance, formatDuration, formatMetres, formatRiskLevel } from "../lib/format";
 
 
 // ==================================================
-// HOSPITAL ICON
+// MARKER ICONS
+//
+// Plain divIcons styled in index.css, so no marker images are
+// loaded from third-party hosts.
 // ==================================================
 
-const hospitalIcon = new L.Icon({
-  iconUrl:
-    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
+function pinIcon(kind, label = "", size = 26) {
+  return L.divIcon({
+    className: `lp-pin lp-pin--${kind}`,
+    html: `<div class="lp-pin__body">${label}</div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -size / 2],
+  });
+}
 
-  shadowUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+const ICONS = {
+  start: pinIcon("start", "A", 28),
+  end: pinIcon("end", "B", 28),
+  hospital: pinIcon("hospital", "H", 22),
+  clinic: pinIcon("clinic", "+", 22),
+  police: pinIcon("police", "P", 22),
+  fire_station: pinIcon("fire_station", "F", 22),
+};
 
-  iconSize: [25, 41],
+const SERVICE_LABELS = {
+  hospital: "Hospital",
+  clinic: "Clinic",
+  police: "Police station",
+  fire_station: "Fire station",
+};
 
-  iconAnchor: [12, 41],
+// Default view (Kerala) until the user picks places.
+const DEFAULT_CENTER = [10.0, 76.3];
+const DEFAULT_ZOOM = 9;
 
-  popupAnchor: [1, -34],
-});
+// OSRM geometry is [longitude, latitude]; Leaflet wants [lat, lon].
+const toLatLngs = (route) =>
+  (route.geometry?.coordinates || []).map(([lon, lat]) => [lat, lon]);
 
 
 // ==================================================
-// POLICE ICON
+// FIT THE MAP TO WHAT MATTERS
 // ==================================================
 
-const policeIcon = new L.Icon({
-  iconUrl:
-    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png",
+function FitView({ source, destination, routes, focus, padding }) {
+  const map = useMap();
 
-  shadowUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  // New results: fit every route.
+  useEffect(() => {
+    if (!routes?.length) return;
 
-  iconSize: [25, 41],
+    const bounds = L.latLngBounds(routes.flatMap(toLatLngs));
 
-  iconAnchor: [12, 41],
+    if (bounds.isValid()) {
+      map.fitBounds(bounds, { paddingTopLeft: padding, paddingBottomRight: [40, 40] });
+    }
+  }, [map, routes, padding]);
 
-  popupAnchor: [1, -34],
-});
+  // Places chosen but no results yet: show them.
+  useEffect(() => {
+    if (routes?.length) return;
 
+    const points = [source, destination]
+      .filter(Boolean)
+      .map((place) => [place.lat, place.lon]);
 
-// ==================================================
-// GET LATITUDE / LONGITUDE FROM OSM OBJECT
-// ==================================================
+    if (points.length === 1) {
+      map.flyTo(points[0], 14, { duration: 0.6 });
+    } else if (points.length === 2) {
+      map.fitBounds(points, { paddingTopLeft: padding, paddingBottomRight: [60, 60] });
+    }
+  }, [map, source, destination, routes, padding]);
 
-function getElementPosition(element) {
+  // A service picked from the list.
+  useEffect(() => {
+    if (focus) {
+      map.flyTo([focus.lat, focus.lon], Math.max(map.getZoom(), 16), { duration: 0.6 });
+    }
+  }, [map, focus]);
 
-  // ----------------------------------------------
-  // NODE
-  // ----------------------------------------------
-
-  if (
-    element?.lat != null &&
-    element?.lon != null
-  ) {
-
-    return [
-      Number(element.lat),
-      Number(element.lon),
-    ];
-
-  }
-
-
-  // ----------------------------------------------
-  // WAY
-  //
-  // Overpass returns the center for ways because
-  // our backend uses:
-  //
-  // out center;
-  // ----------------------------------------------
-
-  if (
-    element?.center?.lat != null &&
-    element?.center?.lon != null
-  ) {
-
-    return [
-      Number(element.center.lat),
-      Number(element.center.lon),
-    ];
-
-  }
-
+  // The map container changes size with the layout.
+  useEffect(() => {
+    const observer = new ResizeObserver(() => map.invalidateSize());
+    observer.observe(map.getContainer());
+    return () => observer.disconnect();
+  }, [map]);
 
   return null;
 }
 
 
 // ==================================================
-// ORIGINAL FRONTEND ROUTING
-//
-// This route is shown before backend analysis.
-//
-// IMPORTANT:
-// Emergency services are NO LONGER searched here.
-// The backend now searches along the actual route.
+// ROUTE LINES
 // ==================================================
 
-function Routing({
-
-  sourceCoords,
-
-  destinationCoords,
-
-  setDistance,
-
-  setTime,
-
-  setWeather,
-
-}) {
-
-  const map = useMap();
-
-
-  useEffect(() => {
-
-    if (
-      !sourceCoords ||
-      !destinationCoords
-    ) {
-
-      return;
-
-    }
-
-
-    // ----------------------------------------------
-    // CREATE ROUTING CONTROL
-    // ----------------------------------------------
-
-    const routingControl =
-      L.Routing.control({
-
-        waypoints: [
-
-          L.latLng(
-            sourceCoords[0],
-            sourceCoords[1]
-          ),
-
-          L.latLng(
-            destinationCoords[0],
-            destinationCoords[1]
-          ),
-
-        ],
-
-
-        lineOptions: {
-
-          styles: [
-            {
-              color: "blue",
-
-              weight: 5,
-            },
-          ],
-
-        },
-
-
-        routeWhileDragging: false,
-
-        addWaypoints: false,
-
-        draggableWaypoints: false,
-
-        fitSelectedRoutes: true,
-
-        show: false,
-
-        createMarker: () => null,
-
-      }).addTo(map);
-
-
-    // ----------------------------------------------
-    // ROUTE FOUND
-    // ----------------------------------------------
-
-    routingControl.on(
-      "routesfound",
-
-      async (e) => {
-
-        const route =
-          e.routes[0];
-
-
-        // ------------------------------------------
-        // DISTANCE
-        // ------------------------------------------
-
-        const distance = (
-
-          route.summary.totalDistance
-          / 1000
-
-        ).toFixed(2);
-
-
-        // ------------------------------------------
-        // TIME
-        // ------------------------------------------
-
-        const time = Math.round(
-
-          route.summary.totalTime
-          / 60
-
-        );
-
-
-        setDistance(
-          distance
-        );
-
-        setTime(
-          time
-        );
-
-
-        // ------------------------------------------
-        // WEATHER
-        //
-        // We keep the existing weather behaviour.
-        // Emergency services are handled by backend.
-        // ------------------------------------------
-
-        try {
-
-          const weatherData =
-            await getWeather(
-
-              destinationCoords[0],
-
-              destinationCoords[1]
-
-            );
-
-
-          console.log(
-            "Weather:",
-            weatherData
-          );
-
-
-          if (weatherData) {
-
-            setWeather(
-              weatherData
-            );
-
-          }
-
-        } catch (error) {
-
-          console.error(
-            "Weather error:",
-            error
-          );
-
-        }
-
-      }
-
-    );
-
-
-    // ----------------------------------------------
-    // CLEANUP
-    // ----------------------------------------------
-
-    return () => {
-
-      try {
-
-        map.removeControl(
-          routingControl
-        );
-
-      } catch {
-
-        console.log(
-          "Routing control already removed."
-        );
-
-      }
-
-    };
-
-
-  }, [
-
-    map,
-
-    sourceCoords,
-
-    destinationCoords,
-
-    setDistance,
-
-    setTime,
-
-    setWeather,
-
-  ]);
-
-
-  return null;
-}
-
-
-// ==================================================
-// BACKEND ROUTES + ROUTE-BASED EMERGENCY SERVICES
-// ==================================================
-
-function BackendRoutes({
-
-  safeRouteData,
-
-  selectedRoute,
-
-}) {
-
-  const map = useMap();
-
-
-  // ==================================================
-  // FIT MAP TO ALL ROUTES
-  // ==================================================
-
-  useEffect(() => {
-
-    if (
-      !safeRouteData ||
-      !safeRouteData.routes ||
-      safeRouteData.routes.length === 0
-    ) {
-
-      return;
-
-    }
-
-
-    const allPoints = [];
-
-
-    safeRouteData.routes.forEach(
-      (route) => {
-
-        const coordinates =
-          route.geometry?.coordinates;
-
-
-        if (!coordinates) {
-
-          return;
-
-        }
-
-
-        coordinates.forEach(
-          ([longitude, latitude]) => {
-
-            allPoints.push([
-
-              latitude,
-
-              longitude,
-
-            ]);
-
-          }
-        );
-
-      }
-    );
-
-
-    if (allPoints.length > 0) {
-
-      map.fitBounds(
-
-        allPoints,
-
-        {
-          padding: [30, 30],
-        }
-
-      );
-
-    }
-
-
-  }, [
-
-    map,
-
-    safeRouteData,
-
-  ]);
-
-
-  // ==================================================
-  // NO BACKEND DATA
-  // ==================================================
-
-  if (
-    !safeRouteData ||
-    !safeRouteData.routes
-  ) {
-
-    return null;
-
-  }
-
-
-  // ==================================================
-  // DETERMINE WHICH ROUTE SHOULD BE HIGHLIGHTED
-  // ==================================================
-
-  const highlightedRoute =
-    selectedRoute ||
-
-    safeRouteData
-      .recommended_route
-      ?.name;
-
-
-  // ==================================================
-  // COLLECT EMERGENCY SERVICES FROM ALL ROUTES
-  // ==================================================
-
-  const hospitalMap =
-    new Map();
-
-  const policeMap =
-    new Map();
-
-
-  safeRouteData.routes.forEach(
-    (route) => {
-
-      // --------------------------------------------
-      // HOSPITALS
-      // --------------------------------------------
-
-      if (
-        route.hospitals &&
-        Array.isArray(route.hospitals)
-      ) {
-
-        route.hospitals.forEach(
-          (hospital) => {
-
-            const key =
-              `${hospital.type}-${hospital.id}`;
-
-
-            if (
-              !hospitalMap.has(key)
-            ) {
-
-              hospitalMap.set(
-                key,
-                {
-                  ...hospital,
-
-                  routeName:
-                    route.name,
-                }
-              );
-
-            }
-
-          }
-        );
-
-      }
-
-
-      // --------------------------------------------
-      // POLICE
-      // --------------------------------------------
-
-      if (
-        route.police_stations &&
-        Array.isArray(
-          route.police_stations
-        )
-      ) {
-
-        route.police_stations.forEach(
-          (station) => {
-
-            const key =
-              `${station.type}-${station.id}`;
-
-
-            if (
-              !policeMap.has(key)
-            ) {
-
-              policeMap.set(
-                key,
-                {
-                  ...station,
-
-                  routeName:
-                    route.name,
-                }
-              );
-
-            }
-
-          }
-        );
-
-      }
-
-    }
+function RouteLine({ route, state, onSelect }) {
+  const positions = useMemo(() => toLatLngs(route), [route]);
+
+  const summary = (
+    <>
+      <strong>{route.name}</strong>
+      {" · "}
+      {route.safety_score == null ? "No score" : `Score ${route.safety_score}`}
+      {" · "}
+      {formatRiskLevel(route.risk_level)}
+      <br />
+      {formatDuration(route.duration_min)} · {formatDistance(route.distance_km)}
+    </>
   );
 
-
-  const routeHospitals =
-    Array.from(
-      hospitalMap.values()
+  if (state === "selected") {
+    return (
+      <>
+        <Polyline
+          positions={positions}
+          pathOptions={{ color: routeColors.casing, weight: 11, opacity: 1 }}
+          interactive={false}
+        />
+        <Polyline
+          positions={positions}
+          pathOptions={{ color: routeColors.selected, weight: 6, opacity: 1 }}
+        >
+          <Tooltip sticky>{summary}</Tooltip>
+        </Polyline>
+      </>
     );
+  }
 
-
-  const routePoliceStations =
-    Array.from(
-      policeMap.values()
-    );
-
+  const isRecommended = state === "recommended";
 
   return (
-
     <>
-
-      {/* ==========================================
-          ROUTES
-      ========================================== */}
-
-      {safeRouteData.routes.map(
-        (route, index) => {
-
-          const coordinates =
-            route.geometry?.coordinates;
-
-
-          if (!coordinates) {
-
-            return null;
-
-          }
-
-
-          // ----------------------------------------
-          // OSRM:
-          //
-          // [longitude, latitude]
-          //
-          // Leaflet:
-          //
-          // [latitude, longitude]
-          // ----------------------------------------
-
-          const positions =
-            coordinates.map(
-
-              ([longitude, latitude]) => [
-
-                latitude,
-
-                longitude,
-
-              ]
-
-            );
-
-
-          // ----------------------------------------
-          // CHECK HIGHLIGHT
-          // ----------------------------------------
-
-          const isHighlighted =
-            highlightedRoute ===
-            route.name;
-
-
-          // ----------------------------------------
-          // CHECK RECOMMENDED
-          // ----------------------------------------
-
-          const isRecommended =
-
-            safeRouteData
-              .recommended_route
-              ?.name ===
-            route.name;
-
-
-          return (
-
-            <Polyline
-
-              key={
-                `backend-route-${index}`
-              }
-
-              positions={
-                positions
-              }
-
-
-              pathOptions={{
-
-                color:
-                  isHighlighted
-                    ? "green"
-                    : "gray",
-
-
-                weight:
-                  isHighlighted
-                    ? 7
-                    : 4,
-
-
-                opacity:
-                  isHighlighted
-                    ? 1
-                    : 0.55,
-
-              }}
-
-            >
-
-              <Popup>
-
-                <div>
-
-                  <strong>
-
-                    {route.name}
-
-                    {isRecommended &&
-                      " ⭐ Recommended"}
-
-                  </strong>
-
-
-                  <br />
-
-
-                  Safety Score:{" "}
-
-                  {route.safety_score ??
-                    "N/A"}
-
-
-                  <br />
-
-
-                  Risk Level:{" "}
-
-                  {route.risk_level ??
-                    "N/A"}
-
-
-                  <br />
-
-
-                  Distance:{" "}
-
-                  {route.distance_km ??
-                    "N/A"}{" "}
-
-                  km
-
-
-                  <br />
-
-
-                  Duration:{" "}
-
-                  {route.duration_min ??
-                    "N/A"}{" "}
-
-                  min
-
-
-                  <br />
-
-
-                  🏥 Hospitals:{" "}
-
-                  {route.hospital_count ??
-                    route.hospitals?.length ??
-                    0}
-
-
-                  <br />
-
-
-                  👮 Police Stations:{" "}
-
-                  {route.police_station_count ??
-                    route.police_stations?.length ??
-                    0}
-
-                </div>
-
-              </Popup>
-
-            </Polyline>
-
-          );
-
-        }
-
-      )}
-
-
-      {/* ==========================================
-          HOSPITAL MARKERS
-      ========================================== */}
-
-      {routeHospitals
-
-        .map(
-          (hospital) => {
-
-            const position =
-              getElementPosition(
-                hospital
-              );
-
-
-            if (!position) {
-
-              return null;
-
-            }
-
-
-            return (
-
-              <Marker
-
-                key={
-                  `route-hospital-${hospital.type}-${hospital.id}`
-                }
-
-                position={
-                  position
-                }
-
-                icon={
-                  hospitalIcon
-                }
-
-              >
-
-                <Popup>
-
-                  <strong>
-
-                    🏥{" "}
-
-                    {
-                      hospital
-                        .tags
-                        ?.name ||
-                      "Unnamed Hospital"
-                    }
-
-                  </strong>
-
-
-                  <br />
-
-
-                  Near:{" "}
-
-                  {
-                    hospital.routeName
-                  }
-
-                  <br />
-
-
-                  <small>
-                    Hospital along analyzed route
-                  </small>
-
-                </Popup>
-
-              </Marker>
-
-            );
-
-          }
-
-        )}
-
-
-      {/* ==========================================
-          POLICE MARKERS
-      ========================================== */}
-
-      {routePoliceStations
-
-        .map(
-          (station) => {
-
-            const position =
-              getElementPosition(
-                station
-              );
-
-
-            if (!position) {
-
-              return null;
-
-            }
-
-
-            return (
-
-              <Marker
-
-                key={
-                  `route-police-${station.type}-${station.id}`
-                }
-
-                position={
-                  position
-                }
-
-                icon={
-                  policeIcon
-                }
-
-              >
-
-                <Popup>
-
-                  <strong>
-
-                    👮{" "}
-
-                    {
-                      station
-                        .tags
-                        ?.name ||
-                      "Police Station"
-                    }
-
-                  </strong>
-
-
-                  <br />
-
-
-                  Near:{" "}
-
-                  {
-                    station.routeName
-                  }
-
-                  <br />
-
-
-                  <small>
-                    Police station along analyzed route
-                  </small>
-
-                </Popup>
-
-              </Marker>
-
-            );
-
-          }
-
-        )}
-
+      {/* Wide invisible line so thin routes are easy to tap. */}
+      <Polyline
+        positions={positions}
+        pathOptions={{ color: "#000", weight: 18, opacity: 0 }}
+        eventHandlers={{ click: () => onSelect(route.id) }}
+      >
+        <Tooltip sticky>
+          {summary}
+          <br />
+          <em>Click to select</em>
+        </Tooltip>
+      </Polyline>
+
+      <Polyline
+        positions={positions}
+        interactive={false}
+        pathOptions={{
+          color: isRecommended ? routeColors.recommended : routeColors.alternative,
+          weight: isRecommended ? 5 : 5,
+          opacity: isRecommended ? 0.95 : 0.85,
+          dashArray: isRecommended ? "10 8" : undefined,
+        }}
+      />
     </>
-
   );
-
 }
 
 
@@ -921,176 +183,123 @@ function BackendRoutes({
 // ==================================================
 
 function MapView({
-
-  sourceCoords,
-
-  destinationCoords,
-
-  setDistance,
-
-  setTime,
-
-  setWeather,
-
-  safeRouteData,
-
-  selectedRoute,
-
+  source,
+  destination,
+  routes,
+  selectedRouteId,
+  recommendedRouteId,
+  onSelectRoute,
+  focusService,
+  fitPadding = [40, 40],
 }) {
+  const selected = routes?.find((route) => route.id === selectedRouteId);
 
+  // Draw order: alternatives, then recommended, then the selected
+  // route on top.
+  const ordered = [...(routes || [])].sort((a, b) => {
+    const rank = (route) =>
+      route.id === selectedRouteId ? 2 : route.id === recommendedRouteId ? 1 : 0;
+    return rank(a) - rank(b);
+  });
 
   return (
-
     <MapContainer
-
-      center={[
-        10.8505,
-        76.2711,
-      ]}
-
-      zoom={8}
-
-      style={{
-
-        height: "500px",
-
-        width: "100%",
-
-      }}
-
+      center={DEFAULT_CENTER}
+      zoom={DEFAULT_ZOOM}
+      zoomControl={false}
+      style={{ height: "100%", width: "100%" }}
     >
-
-      {/* ==========================================
-          OPENSTREETMAP
-      ========================================== */}
-
       <TileLayer
-
-        attribution="&copy; OpenStreetMap contributors"
-
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        maxZoom={19}
       />
 
+      <ZoomControlRight />
 
-      {/* ==========================================
-          SOURCE
-      ========================================== */}
+      <FitView
+        source={source}
+        destination={destination}
+        routes={routes}
+        focus={focusService}
+        padding={fitPadding}
+      />
 
-      {sourceCoords && (
-
-        <Marker
-          position={
-            sourceCoords
-          }
-        >
-
-          <Popup>
-
-            📍 Source
-
-          </Popup>
-
-        </Marker>
-
-      )}
-
-
-      {/* ==========================================
-          DESTINATION
-      ========================================== */}
-
-      {destinationCoords && (
-
-        <Marker
-          position={
-            destinationCoords
-          }
-        >
-
-          <Popup>
-
-            🏁 Destination
-
-          </Popup>
-
-        </Marker>
-
-      )}
-
-
-      {/* ==========================================
-          OLD FRONTEND ROUTE
-          
-          This appears only BEFORE backend analysis.
-          
-          Once safeRouteData exists, backend routes
-          replace it.
-      ========================================== */}
-
-      {sourceCoords &&
-        destinationCoords &&
-        !safeRouteData && (
-
-          <Routing
-
-            sourceCoords={
-              sourceCoords
+      {ordered.map((route) => (
+        <Fragment key={route.id}>
+          <RouteLine
+            route={route}
+            state={
+              route.id === selectedRouteId
+                ? "selected"
+                : route.id === recommendedRouteId
+                  ? "recommended"
+                  : "alternative"
             }
-
-            destinationCoords={
-              destinationCoords
-            }
-
-            setDistance={
-              setDistance
-            }
-
-            setTime={
-              setTime
-            }
-
-            setWeather={
-              setWeather
-            }
-
+            onSelect={onSelectRoute}
           />
+        </Fragment>
+      ))}
 
-        )}
+      {/* Emergency services near the selected route only, to keep
+          the map readable. */}
+      {selected?.emergency_services.map((service) => (
+        <Marker
+          key={service.id}
+          position={[service.lat, service.lon]}
+          icon={ICONS[service.kind] || ICONS.hospital}
+        >
+          <Popup>
+            <strong>{service.name || `Unnamed ${SERVICE_LABELS[service.kind].toLowerCase()}`}</strong>
+            <br />
+            {SERVICE_LABELS[service.kind]}
+            {service.emergency_ward ? " · Emergency department" : ""}
+            <br />
+            {formatMetres(service.distance_m)} from {selected.name}
+            {service.phone && (
+              <>
+                <br />
+                <a href={`tel:${service.phone.split(/[;,]/)[0].trim()}`}>{service.phone}</a>
+              </>
+            )}
+          </Popup>
+        </Marker>
+      ))}
 
-
-      {/* ==========================================
-          BACKEND ROUTES
-
-          Includes:
-
-          • Alternative routes
-          • Recommended route
-          • Hospitals along routes
-          • Police stations along routes
-      ========================================== */}
-
-      {safeRouteData && (
-
-        <BackendRoutes
-
-          safeRouteData={
-            safeRouteData
-          }
-
-          selectedRoute={
-            selectedRoute
-          }
-
-        />
-
+      {source && (
+        <Marker position={[source.lat, source.lon]} icon={ICONS.start} zIndexOffset={1000}>
+          <Popup>
+            <strong>Start</strong>
+            <br />
+            {source.name}
+          </Popup>
+        </Marker>
       )}
 
+      {destination && (
+        <Marker position={[destination.lat, destination.lon]} icon={ICONS.end} zIndexOffset={1000}>
+          <Popup>
+            <strong>Destination</strong>
+            <br />
+            {destination.name}
+          </Popup>
+        </Marker>
+      )}
     </MapContainer>
-
   );
-
 }
 
+// Zoom buttons on the right, away from the route panel.
+function ZoomControlRight() {
+  const map = useMap();
+
+  useEffect(() => {
+    const control = L.control.zoom({ position: "topright" });
+    control.addTo(map);
+    return () => control.remove();
+  }, [map]);
+
+  return null;
+}
 
 export default MapView;
