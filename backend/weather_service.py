@@ -6,6 +6,7 @@ sample point for every route is fetched in one request.
 """
 
 import logging
+import time
 
 import httpx
 
@@ -29,10 +30,41 @@ CURRENT_FIELDS = (
 
 _weather_cache = TTLCache(ttl_seconds=600)
 
+# Open-Meteo normally answers in well under a second. A slow or failing
+# service must not hold up route analysis: give it a few seconds, and
+# after a failure skip it for a minute (weather is then reported as
+# unavailable, and the score says so).
+WEATHER_TIMEOUT_S = 4.0
+FAILURE_PAUSE_S = 60
+
+_paused_until = 0.0
+
+
+# Weather changes slowly across space (the forecast model's own grid is
+# several kilometres wide), so readings are shared inside ~5 km cells.
+# This lets the API start fetching weather while routes are still being
+# computed: the start, middle and end of the trip cover almost every
+# point a route will later ask about.
+CELL_DEG = 0.05
+
 
 def _cache_key(lat, lon):
-    # ~1 km grid: weather does not change meaningfully inside it.
-    return (round(lat, 2), round(lon, 2))
+    return (round(lat / CELL_DEG), round(lon / CELL_DEG))
+
+
+def cell_centres(south, west, north, east, pad_deg=0.03, max_cells=12):
+    """
+    Centres of every weather cell covering a trip's area (padded, since
+    routes wander), or None when that would be too many for one request.
+    """
+
+    rows = range(round((south - pad_deg) / CELL_DEG), round((north + pad_deg) / CELL_DEG) + 1)
+    columns = range(round((west - pad_deg) / CELL_DEG), round((east + pad_deg) / CELL_DEG) + 1)
+
+    if len(rows) * len(columns) > max_cells:
+        return None
+
+    return [(i * CELL_DEG, j * CELL_DEG) for i in rows for j in columns]
 
 
 def _parse(current):
@@ -58,6 +90,8 @@ async def get_weather_for_points(points):
     treat a missing reading as "no rain".
     """
 
+    global _paused_until
+
     results = [
         _weather_cache.get(_cache_key(lat, lon))
         for lat, lon in points
@@ -72,6 +106,10 @@ async def get_weather_for_points(points):
     if not missing:
         return results
 
+    if time.monotonic() < _paused_until:
+        logger.debug("Weather service paused after a recent failure")
+        return results
+
     params = {
         "latitude": ",".join(f"{points[i][0]:.4f}" for i in missing),
         "longitude": ",".join(f"{points[i][1]:.4f}" for i in missing),
@@ -80,13 +118,14 @@ async def get_weather_for_points(points):
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=WEATHER_TIMEOUT_S) as client:
             response = await client.get(WEATHER_URL, params=params)
             response.raise_for_status()
             data = response.json()
 
     except (httpx.HTTPError, ValueError) as error:
-        logger.warning("Weather request failed: %s", error)
+        _paused_until = time.monotonic() + FAILURE_PAUSE_S
+        logger.warning("Weather request failed (%s); pausing weather for %ss", type(error).__name__, FAILURE_PAUSE_S)
         return results
 
     # A single location comes back as an object, several as a list.
@@ -112,3 +151,12 @@ async def get_weather(latitude, longitude):
     reading, = await get_weather_for_points([(latitude, longitude)])
 
     return reading
+
+
+async def prefetch(points):
+    """Warm the cache for `points`; never raises (this is only an optimisation)."""
+
+    try:
+        await get_weather_for_points(points)
+    except Exception as error:
+        logger.debug("Weather prefetch failed: %s", error)

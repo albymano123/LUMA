@@ -189,27 +189,58 @@ def build_network(ways):
 # MEASURE ONE ROUTE
 # ==================================================
 
+def _project(points, origin_lat, origin_lon):
+    """[lon, lat] rows -> local metres (east, north) around an origin."""
+
+    points = np.asarray(points, dtype=float)
+
+    return (
+        np.radians(points[:, 0] - origin_lon) * math.cos(math.radians(origin_lat)) * EARTH_RADIUS_M,
+        np.radians(points[:, 1] - origin_lat) * EARTH_RADIUS_M,
+    )
+
+
 def _near(points, samples, radius_m, chunk=2000):
-    """Boolean mask: which [lon, lat] points lie within radius_m of any sample."""
+    """
+    Boolean mask: which [lon, lat] points lie within radius_m of any sample.
+
+    A grid with cells of radius_m finds the few points that could be near
+    the route (those in a cell next to a sample's cell); only those get an
+    exact distance check. On a long route this avoids comparing thousands
+    of far-away segments against every sample.
+    """
 
     if len(points) == 0 or len(samples) == 0:
         return np.zeros(len(points), dtype=bool)
 
     samples = np.asarray(samples, dtype=float)
+    origin_lat = float(samples[:, 1].mean())
+    origin_lon = float(samples[:, 0].mean())
 
-    # Cheap bounding-box prefilter (degrees) before the distance matrix.
-    pad_lat = radius_m / 111_320 * 1.5
-    pad_lon = pad_lat / max(0.2, math.cos(math.radians(samples[:, 1].mean())))
+    sx, sy = _project(samples, origin_lat, origin_lon)
+    px, py = _project(points, origin_lat, origin_lon)
 
-    inside = (
-        (points[:, 0] >= samples[:, 0].min() - pad_lon)
-        & (points[:, 0] <= samples[:, 0].max() + pad_lon)
-        & (points[:, 1] >= samples[:, 1].min() - pad_lat)
-        & (points[:, 1] <= samples[:, 1].max() + pad_lat)
-    )
+    cell = max(radius_m, 1.0)
+
+    def key(cx, cy):
+        # Offsets keep the cell indices positive; 2**24 cells is far more
+        # than any trip needs (16,000 km at 1 m cells).
+        return (cx + (1 << 23)) * (1 << 24) + (cy + (1 << 23))
+
+    sample_cx = np.floor(sx / cell).astype(np.int64)
+    sample_cy = np.floor(sy / cell).astype(np.int64)
+
+    occupied = np.unique(np.concatenate([
+        key(sample_cx + dx, sample_cy + dy)
+        for dx in (-1, 0, 1)
+        for dy in (-1, 0, 1)
+    ]))
+
+    point_keys = key(np.floor(px / cell).astype(np.int64), np.floor(py / cell).astype(np.int64))
 
     mask = np.zeros(len(points), dtype=bool)
-    candidates = np.flatnonzero(inside)
+    candidates = np.flatnonzero(np.isin(point_keys, occupied))
+    points = np.asarray(points, dtype=float)
 
     for start in range(0, len(candidates), chunk):
         part = candidates[start:start + chunk]

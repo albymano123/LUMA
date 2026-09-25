@@ -4,6 +4,8 @@ import FactCheckOutlinedIcon from "@mui/icons-material/FactCheckOutlined";
 import LocalHospitalOutlinedIcon from "@mui/icons-material/LocalHospitalOutlined";
 import NightlightOutlinedIcon from "@mui/icons-material/NightlightOutlined";
 import StorefrontOutlinedIcon from "@mui/icons-material/StorefrontOutlined";
+import HomeWorkOutlinedIcon from "@mui/icons-material/HomeWorkOutlined";
+import AltRouteOutlinedIcon from "@mui/icons-material/AltRouteOutlined";
 import WbCloudyOutlinedIcon from "@mui/icons-material/WbCloudyOutlined";
 
 const FEATURES = [
@@ -27,7 +29,9 @@ const FEATURES = [
 const FACTORS = [
   { icon: <LocalHospitalOutlinedIcon fontSize="small" />, title: "Emergency access", text: "How close the route stays to hospitals and police." },
   { icon: <StorefrontOutlinedIcon fontSize="small" />, title: "Street activity", text: "Shops, cafés and transit stops along the way." },
-  { icon: <NightlightOutlinedIcon fontSize="small" />, title: "Street lighting", text: "Roads mapped as lit, weighted more after dark." },
+  { icon: <HomeWorkOutlinedIcon fontSize="small" />, title: "Built-up surroundings", text: "Buildings nearby, and the longest empty stretch." },
+  { icon: <NightlightOutlinedIcon fontSize="small" />, title: "Street lighting", text: "Roads mapped as lit, where the map has that detail." },
+  { icon: <AltRouteOutlinedIcon fontSize="small" />, title: "Road exposure", text: "Fast main roads, sidewalks and speed limits." },
   { icon: <WbCloudyOutlinedIcon fontSize="small" />, title: "Weather", text: "Live rain, wind, storms and visibility." },
 ];
 
@@ -87,7 +91,7 @@ function Features() {
           <Box
             sx={{
               display: "grid",
-              gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)", md: "repeat(4, 1fr)" },
+              gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)", md: "repeat(3, 1fr)" },
               gap: 2.5,
             }}
           >

@@ -46,6 +46,7 @@ def current(temp=30, rain=0.0, is_day=1):
 @pytest.fixture(autouse=True)
 def fresh_caches(monkeypatch):
     monkeypatch.setattr(weather, "_weather_cache", weather.TTLCache(ttl_seconds=60))
+    monkeypatch.setattr(weather, "_paused_until", 0.0)
     monkeypatch.setattr(geo, "_search_cache", geo.TTLCache(ttl_seconds=60))
     monkeypatch.setattr(geo, "_reverse_cache", geo.TTLCache(ttl_seconds=60))
 
@@ -211,3 +212,52 @@ def test_reverse_geocode_keeps_the_exact_coordinates(monkeypatch):
 
     assert place["name"] == "Some Road"
     assert (place["lat"], place["lon"]) == (10.3, 76.33)
+
+
+# ============================ weather cells ============================
+
+def test_cell_centres_cover_a_trips_area():
+    cells = weather.cell_centres(10.30, 76.30, 10.37, 76.34)
+
+    assert 1 < len(cells) <= 12
+    lats = [lat for lat, _ in cells]
+    lons = [lon for _, lon in cells]
+    # The trip's own corners fall in cells that were fetched.
+    keys = {weather._cache_key(lat, lon) for lat, lon in cells}
+    for corner in ((10.30, 76.30), (10.37, 76.34), (10.335, 76.32)):
+        assert weather._cache_key(*corner) in keys
+    assert min(lats) <= 10.30 and max(lats) >= 10.37 and min(lons) <= 76.30 and max(lons) >= 76.34
+
+
+def test_long_trips_do_not_fetch_a_grid():
+    assert weather.cell_centres(8.5, 76.9, 12.9, 77.6) is None
+
+
+def test_prefetch_never_raises(monkeypatch):
+    serve(monkeypatch, weather, lambda r: httpx.Response(503))
+
+    asyncio.run(weather.prefetch([(10.3, 76.3)]))
+
+
+def test_a_failing_weather_service_is_skipped_for_a_while(monkeypatch):
+    requests = serve(monkeypatch, weather, lambda r: httpx.Response(503))
+
+    assert readings([(10.3, 76.3)]) == [None]
+    assert readings([(10.9, 76.9)]) == [None]      # a different point, same outage
+
+    # The second call did not wait for another failing request.
+    assert len(requests) == 1
+
+
+def test_weather_recovers_after_the_pause(monkeypatch):
+    serve(monkeypatch, weather, lambda r: httpx.Response(503))
+    readings([(10.3, 76.3)])
+
+    monkeypatch.setattr(weather, "_paused_until", 0.0)
+    serve(monkeypatch, weather, lambda r: httpx.Response(200, json=current(27)))
+
+    assert readings([(10.3, 76.3)])[0]["temperature"] == 27
+
+
+def test_slow_weather_is_given_up_on_quickly(monkeypatch):
+    assert weather.WEATHER_TIMEOUT_S <= 5

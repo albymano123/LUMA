@@ -111,6 +111,9 @@ function MapPage() {
 
       setSafeRouteData(result);
       setSelectedRoute(result.default_route_id ?? result.routes[0].id);
+      // The first selection is the recommended (safest) route, or the
+      // quickest when nothing can be recommended; show that as the choice.
+      setPreference(result.recommended_route_id ? "safest" : "fastest");
       setStatus("success");
     } catch (requestError) {
       if (controller.signal.aborted) return;

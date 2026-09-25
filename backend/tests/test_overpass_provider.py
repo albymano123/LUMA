@@ -21,7 +21,7 @@ PRIMARY = es.PRIMARY_SERVER
 FALLBACK_1, FALLBACK_2 = es.FALLBACK_SERVERS
 
 
-def fake_servers(monkeypatch, behaviour, hedge=0.05, deadline=1.0):
+def fake_servers(monkeypatch, behaviour, hedge=0.05, deadline=5.0):
     """behaviour: url -> (delay_seconds, response dict or Exception)"""
 
     calls = []

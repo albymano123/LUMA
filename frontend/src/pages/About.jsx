@@ -24,8 +24,16 @@ const FACTORS = [
     text: "How much of the route passes shops, cafés, banks, transit stops and similar places, as a rough sign that other people are around. Not scored for driving.",
   },
   {
+    title: "Built-up surroundings",
+    text: "How much of the route has mapped buildings close by, and the longest stretch with none. Long empty stretches can feel isolated, so they count against a route.",
+  },
+  {
     title: "Street lighting",
-    text: "The share of mapped streets along the route tagged as lit in OpenStreetMap. Only scored when enough streets carry lighting information.",
+    text: "The share of streets along the route mapped as lit in OpenStreetMap. Lighting is rarely mapped, so it is only scored when at least 30% of the route's streets carry the information. Unmapped does not mean unlit.",
+  },
+  {
+    title: "Road and traffic exposure",
+    text: "For walking and cycling: how much of the route follows fast main roads, plus sidewalks and posted speed limits where they are mapped.",
   },
   {
     title: "Weather",
@@ -56,7 +64,7 @@ function About() {
         </Typography>
 
         <Typography variant="h5" sx={{ mb: 2 }}>
-          The four factors
+          The six factors
         </Typography>
 
         <Stack spacing={1.5} sx={{ mb: 5 }}>
@@ -75,8 +83,8 @@ function About() {
         </Typography>
 
         <Typography color="text.secondary" sx={{ mb: 5, lineHeight: 1.7 }}>
-          After dark, lighting and street activity count for more and weather
-          for less. Factors are measured along the length of the route, so a
+          After dark, lighting, street activity and built-up surroundings count
+          for more and weather for less. Factors are measured along the length of the route, so a
           longer route doesn't score higher just because it passes more
           places.
         </Typography>
@@ -107,10 +115,11 @@ function About() {
         </Typography>
 
         <Typography color="text.secondary" sx={{ mb: 5, lineHeight: 1.7 }}>
-          The data comes from free public services that are sometimes busy.
-          If a data source doesn't respond, that factor is left out instead
-          of being counted as zero, and the route shows lower confidence. If
-          too little data is available, no score is shown at all.
+          If a data source doesn't respond, or a detail such as lighting
+          isn't mapped, that factor is left out instead of being counted as
+          zero, and the route shows lower confidence. If too little data is
+          available, no score is shown at all, and no route is called
+          recommended.
         </Typography>
 
         <Typography variant="h5" sx={{ mb: 1.5 }}>
@@ -119,9 +128,12 @@ function About() {
 
         <Typography color="text.secondary" sx={{ mb: 5, lineHeight: 1.7 }}>
           <strong>Safest</strong> is the route with the highest safety score
-          and is always the one recommended. <strong>Balanced</strong> weighs
-          safety against time and distance. <strong>Time-efficient</strong>{" "}
-          is the quickest route, still with its safety information shown.
+          (scores within 2 points count as equal, and the quicker route wins).
+          It is only labelled <em>Recommended</em> when the data supports it.
+          <strong> Balanced</strong> weighs safety against time and distance.
+          <strong> Time-efficient</strong> is the quickest route, still with
+          its safety information shown. What you select and what is
+          recommended are shown separately.
         </Typography>
 
         <Alert severity="warning" sx={{ mb: 5 }}>
@@ -132,10 +144,13 @@ function About() {
         </Alert>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
-          Data sources: OpenStreetMap contributors (roads, places, lighting),
-          OSRM (routing), Photon (place search), Open-Meteo (weather). An
-          experimental machine-learning estimate is shown for comparison but
-          is not used to rank routes.
+          Data sources: OpenStreetMap contributors (roads, buildings, places,
+          lighting; a Kerala extract is stored locally, other areas use live
+          public servers), OSRM (routing), Photon (place search), Open-Meteo
+          (weather). Scores are not built from crime or incident records,
+          because none are available. There is no trained machine-learning
+          model yet: it would need real incident data, and until then the
+          app says so instead of showing an estimate.
         </Typography>
 
         <Button component={RouterLink} to="/map" variant="contained" size="large">

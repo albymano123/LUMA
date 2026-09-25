@@ -180,3 +180,34 @@ def test_route_shape_straight_vs_twisty():
     assert twisty["sharp_turns"] >= 5
     assert twisty["directness"] < straight["directness"]
     assert twisty["turns_per_km"] > straight["turns_per_km"]
+
+
+def test_near_matches_brute_force_distances():
+    """The grid lookup must give exactly the same answer as comparing everything."""
+
+    from geo import distance_matrix_m
+
+    rng = np.random.default_rng(7)
+    samples = np.column_stack([
+        76.30 + np.linspace(0, 0.05, 80),
+        10.30 + np.linspace(0, 0.04, 80) + rng.normal(0, 0.0003, 80),
+    ])
+    points = np.column_stack([
+        76.28 + rng.random(4000) * 0.09,
+        10.28 + rng.random(4000) * 0.08,
+    ])
+
+    for radius in (25, 60, 150):
+        expected = distance_matrix_m(points, samples).min(axis=1) <= radius
+        actual = rf._near(points, samples, radius)
+
+        # Two different equirectangular projections can disagree by a
+        # metre or so exactly at the boundary; nothing may differ beyond that.
+        boundary = np.abs(distance_matrix_m(points, samples).min(axis=1) - radius) < 1.5
+        assert (expected == actual)[~boundary].all()
+        assert (expected != actual).sum() <= 3
+
+
+def test_near_handles_empty_inputs():
+    assert rf._near(np.zeros((0, 2)), np.array([[76.3, 10.3]]), 25).shape == (0,)
+    assert not rf._near(np.array([[76.3, 10.3]]), np.zeros((0, 2)), 25).any()

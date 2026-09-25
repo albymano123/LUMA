@@ -28,7 +28,7 @@ function PreviewCard() {
       aria-label="Example of a route comparison"
     >
       <Typography variant="overline" color="text.secondary">
-        Example comparison
+        Illustration only, not real data
       </Typography>
 
       <Stack spacing={1.25} sx={{ mt: 0.5 }}>
@@ -125,10 +125,11 @@ function Hero() {
             <Typography
               sx={{ fontSize: { xs: 17, md: 19 }, color: "rgba(255,255,255,0.8)", maxWidth: 560, lineHeight: 1.6 }}
             >
-              LumaPath compares routes using open data on nearby hospitals
-              and police, street activity, lighting and live weather, and
-              explains why each route scores the way it does. Made for
-              anyone finding their way somewhere new.
+              LumaPath compares routes using open map data on nearby hospitals
+              and police, how built-up and busy the streets are, lighting,
+              road traffic and live weather, and explains why each route
+              scores the way it does. Made for anyone finding their way
+              somewhere new.
             </Typography>
 
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mt: 4 }}>

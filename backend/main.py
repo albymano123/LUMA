@@ -28,6 +28,7 @@ from geo_context import get_store
 from geocoding_service import reverse_geocode, search_places
 from route_analyzer import analyze_all_routes
 from routing_service import RoutingError, get_alternative_routes
+from weather_service import cell_centres, prefetch as prefetch_weather
 from schemas import ErrorDetail, RouteRequest, SafeRouteResponse
 
 
@@ -286,6 +287,20 @@ async def safe_route(body: RouteRequest, request: Request):
 
     started = time.monotonic()
 
+    # Weather does not depend on the routes, so start it now and let it
+    # run while OSRM works. Readings are shared inside ~5 km cells, so
+    # fetching every cell the trip's area touches covers whatever points
+    # the routes later ask about (a long trip just fetches its ends).
+    weather_points = cell_centres(
+        min(body.source_lat, body.destination_lat), min(body.source_lon, body.destination_lon),
+        max(body.source_lat, body.destination_lat), max(body.source_lon, body.destination_lon),
+    ) or [
+        (body.source_lat, body.source_lon),
+        ((body.source_lat + body.destination_lat) / 2, (body.source_lon + body.destination_lon) / 2),
+        (body.destination_lat, body.destination_lon),
+    ]
+    weather_task = asyncio.create_task(prefetch_weather(weather_points))
+
     try:
         routes = await get_alternative_routes(
             body.source_lat, body.source_lon,
@@ -294,11 +309,19 @@ async def safe_route(body: RouteRequest, request: Request):
         )
 
     except RoutingError as routing_error:
+        weather_task.cancel()
         raise error(404, str(routing_error), request)
 
     except Exception:
+        weather_task.cancel()
         logger.exception("Routing failed")
         raise error(502, "The routing service is unavailable right now. Please try again shortly.", request)
+
+    # Usually already done; a cache miss inside the analysis would fetch it again.
+    try:
+        await asyncio.wait_for(asyncio.shield(weather_task), timeout=6)
+    except Exception:
+        pass
 
     try:
         result = await asyncio.wait_for(

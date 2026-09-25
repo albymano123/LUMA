@@ -55,6 +55,8 @@ test.describe("planning a trip", () => {
     await expect(card(page, "Route B")).toHaveAttribute("aria-pressed", "true");
     await expect(card(page, "Route B")).toContainText("Recommended");
     await expect(card(page, "Route A")).not.toContainText("Recommended");
+    // The active choice starts as Safest, because the safest route is selected.
+    await expect(preference(page, "Safest")).toHaveAttribute("aria-pressed", "true");
 
     await expect(scoreRing(page, "Safety score 84 out of 100")).toBeVisible();
     await expect(page.getByText(/12 points ahead/)).toBeVisible();
@@ -165,6 +167,8 @@ test.describe("honest safety information", () => {
     await expect(scoreRing(page, "No safety score")).toBeVisible();
     await expect(page.getByText("Insufficient data").first()).toBeVisible();
     await expect(preference(page, "Safest")).toBeDisabled();
+    // With nothing recommendable, the quickest route is the active choice.
+    await expect(preference(page, "Time-efficient")).toHaveAttribute("aria-pressed", "true");
 
     // No green "recommended" route line on the map.
     await expect(paths(page, RECOMMENDED_STROKE)).toHaveCount(0);

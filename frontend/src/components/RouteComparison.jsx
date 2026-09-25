@@ -164,7 +164,15 @@ function RouteComparison({
             key={option.value}
             value={option.value}
             disabled={!routeFor(option.value)}
-            sx={{ gap: 0.75, textTransform: "none", fontWeight: 600 }}
+            sx={{
+              gap: { xs: 0.25, sm: 0.75 },
+              flexDirection: { xs: "column", sm: "row" },
+              fontSize: { xs: "0.75rem", sm: "0.8125rem" },
+              lineHeight: 1.2,
+              px: 0.5,
+              textTransform: "none",
+              fontWeight: 600,
+            }}
           >
             {option.icon}
             {option.label}
