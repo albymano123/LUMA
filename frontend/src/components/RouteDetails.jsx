@@ -14,7 +14,7 @@ import RouteEnvironment from "./RouteEnvironment";
 import RouteInfo from "./RouteInfo";
 import SafetyScore from "./SafetyScore";
 import WeatherInfo from "./WeatherInfo";
-import { CATEGORY_LABELS } from "../lib/format";
+import { CATEGORY_LABELS, RECOMMENDATION_LABELS } from "../lib/format";
 
 function Section({ title, children }) {
   return (
@@ -30,9 +30,11 @@ function Section({ title, children }) {
 // Everything about the selected route, as analysed by the backend.
 function RouteDetails({
   route,
-  isRecommended,
-  recommendationReason,
+  recommendation,
+  preference,
+  routes,
   dataSources,
+  geoSource,
   disclaimer,
   onFocusService,
 }) {
@@ -40,13 +42,21 @@ function RouteDetails({
     return null;
   }
 
+  const isRecommended = recommendation?.route_id === route.id;
+  const recommendedRoute = routes?.find((item) => item.id === recommendation?.route_id);
+
   return (
     <Paper variant="outlined" sx={{ px: 2.5, pt: 2.5, pb: 1 }}>
       <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
         <Typography variant="h6">{route.name}</Typography>
 
         {isRecommended && (
-          <Chip size="small" color="success" icon={<StarRoundedIcon />} label="Recommended" />
+          <Chip
+            size="small"
+            color="success"
+            icon={<StarRoundedIcon />}
+            label={RECOMMENDATION_LABELS[recommendation.state]}
+          />
         )}
 
         {route.categories.map((category) => (
@@ -60,9 +70,18 @@ function RouteDetails({
         </Typography>
       )}
 
-      {isRecommended && recommendationReason && (
+      {isRecommended && recommendation.reason && (
         <Alert severity="success" icon={<StarRoundedIcon />} sx={{ mt: 2 }}>
-          {recommendationReason}
+          {recommendation.reason}
+        </Alert>
+      )}
+
+      {!isRecommended && recommendedRoute && (
+        <Alert severity="info" sx={{ mt: 2 }} data-testid="not-recommended-note">
+          {preference ? `You chose ${CATEGORY_LABELS[preference]}. ` : ""}
+          The route with the best safety score is {recommendedRoute.name}
+          {recommendedRoute.safety_score != null && ` (${recommendedRoute.safety_score}/100)`}
+          {route.safety_score != null && `; this route scores ${route.safety_score}/100`}.
         </Alert>
       )}
 
@@ -98,6 +117,13 @@ function RouteDetails({
       <Divider />
 
       <RouteEnvironment route={route} />
+
+      {geoSource && (
+        <Typography variant="caption" color="text.secondary" component="p" sx={{ pt: 1.5 }}>
+          Map data: {geoSource.label}
+          {geoSource.date ? `, extract dated ${geoSource.date}` : ""} (&copy; OpenStreetMap contributors).
+        </Typography>
+      )}
 
       {disclaimer && (
         <Typography

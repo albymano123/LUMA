@@ -1,26 +1,34 @@
 """
-Rule-based, explainable safety scoring.
+Rule-based, explainable safety scoring - the single source of truth.
 
-Each route is scored on four factors, each 0-100:
+The frontend only displays what this module returns; it never
+calculates or adjusts a score.
 
-  emergency  - how close the route stays to a hospital or clinic,
-               and to a police station
-  activity   - how much of the route passes shops, food places,
-               transit stops etc. (a proxy for "other people around")
-  lighting   - share of OpenStreetMap-tagged streets on the route
-               that are marked as lit
-  weather    - current rain, wind, storms and visibility
+A route is scored on up to six factors, each 0-100, each built from
+real, mapped data and each measured as a share of the route's length
+(so a longer route does not look safer just because it passes more
+things):
 
-Factors are measured as a share of the route's length (not raw
-counts), so a longer route does not look safer just because it
-passes more buildings.
+  emergency     how close the route stays to hospitals/clinics and
+                police stations
+  activity      how much of the route passes shops, food places,
+                banks, transit stops (people around)
+  surroundings  how much of the route has buildings nearby, and the
+                longest isolated stretch with none
+  lighting      share of streets marked lit in OpenStreetMap
+  road_safety   traffic exposure for people on foot or bicycle:
+                sidewalks, speed limits, share of fast main roads
+  weather       current rain, wind, storms and visibility
 
 When a factor's data is unavailable it is left out and the remaining
 weights are rescaled; the response reports this as lower confidence
-instead of pretending the value is zero.
+instead of pretending the value is zero. Tag-based factors (lighting,
+sidewalks, speed limits) are only used when enough of the route's
+streets carry the tag, because OpenStreetMap tagging is uneven.
 
-The score describes conditions based on available open data. It is
-not a guarantee that a route is safe.
+The score describes conditions visible in open data. It is not a
+guarantee that a route is safe, and it is not built from crime or
+incident records (none are available).
 """
 
 
@@ -28,28 +36,29 @@ not a guarantee that a route is safe.
 # WEIGHTS
 # ==================================================
 #
-# At night lighting and activity matter more; weather matters
-# relatively less. For drivers, street activity and lighting
-# matter less than emergency access and weather.
+# Each row sums to 1.0. At night lighting, activity and surroundings
+# matter more and weather relatively less. Cycling gives road/traffic
+# exposure more weight; for drivers, people around and lighting matter
+# less than emergency access and weather (a weight of 0 means the
+# factor does not apply to that mode).
 #
 # ==================================================
 
 WEIGHTS = {
-    ("walking", True): {"emergency": 0.30, "activity": 0.25, "lighting": 0.15, "weather": 0.30},
-    ("walking", False): {"emergency": 0.25, "activity": 0.25, "lighting": 0.30, "weather": 0.20},
-    ("cycling", True): {"emergency": 0.30, "activity": 0.20, "lighting": 0.15, "weather": 0.35},
-    ("cycling", False): {"emergency": 0.25, "activity": 0.20, "lighting": 0.30, "weather": 0.25},
-    # Street activity is not scored for drivers (weight 0): it says
-    # little about safety inside a car, and it is the most expensive
-    # data to fetch.
-    ("driving", True): {"emergency": 0.45, "activity": 0.0, "lighting": 0.15, "weather": 0.40},
-    ("driving", False): {"emergency": 0.40, "activity": 0.0, "lighting": 0.25, "weather": 0.35},
+    ("walking", True): {"emergency": 0.25, "activity": 0.15, "surroundings": 0.20, "lighting": 0.05, "road_safety": 0.10, "weather": 0.25},
+    ("walking", False): {"emergency": 0.20, "activity": 0.20, "surroundings": 0.20, "lighting": 0.20, "road_safety": 0.10, "weather": 0.10},
+    ("cycling", True): {"emergency": 0.25, "activity": 0.10, "surroundings": 0.15, "lighting": 0.05, "road_safety": 0.20, "weather": 0.25},
+    ("cycling", False): {"emergency": 0.20, "activity": 0.10, "surroundings": 0.15, "lighting": 0.20, "road_safety": 0.20, "weather": 0.15},
+    ("driving", True): {"emergency": 0.40, "activity": 0.0, "surroundings": 0.10, "lighting": 0.10, "road_safety": 0.0, "weather": 0.40},
+    ("driving", False): {"emergency": 0.35, "activity": 0.0, "surroundings": 0.10, "lighting": 0.25, "road_safety": 0.0, "weather": 0.30},
 }
 
 FACTOR_LABELS = {
     "emergency": "Emergency access",
     "activity": "Street activity",
+    "surroundings": "Built-up surroundings",
     "lighting": "Street lighting",
+    "road_safety": "Road and traffic exposure",
     "weather": "Weather",
 }
 
@@ -57,10 +66,18 @@ FACTOR_LABELS = {
 # publish a score at all. Weather on its own never qualifies: at
 # least one map-based factor must be present too.
 MIN_SCORED_WEIGHT = 0.4
-MAP_FACTORS = ("emergency", "activity", "lighting")
+MAP_FACTORS = ("emergency", "activity", "surroundings", "lighting", "road_safety")
 
-# Lighting needs a handful of tagged streets before we trust the ratio.
-MIN_LIT_SEGMENTS = 4
+# A tag-based ratio (lit, sidewalk, speed limit) is only trusted when
+# at least this share of the route's streets carry the tag.
+MIN_TAG_COVERAGE = 0.30
+
+# Routes whose scores differ by no more than this are treated as
+# equally safe: it is smaller than the noise in open data, and it keeps
+# a 1-point difference from choosing a much slower route.
+SCORE_TIE_MARGIN = 2
+
+CONFIDENCE_RANK = {"high": 2, "medium": 1, "low": 0}
 
 
 def risk_level(score):
@@ -76,6 +93,10 @@ def risk_level(score):
 
 def _pct(share):
     return f"{round(share * 100)}%"
+
+
+def _missing(text):
+    return None, [{"impact": "neutral", "text": text}]
 
 
 # ==================================================
@@ -100,10 +121,7 @@ def score_emergency(metrics):
     police = metrics.get("police_access")
 
     if hospital is None or police is None:
-        return None, [{
-            "impact": "neutral",
-            "text": "Emergency-service data is temporarily unavailable, so it was not scored",
-        }]
+        return _missing("Emergency-service data was unavailable, so it was not scored")
 
     score = 100 * (0.5 * hospital + 0.5 * police)
     notes = []
@@ -115,11 +133,11 @@ def score_emergency(metrics):
         distance = _describe_distance(metrics.get(median_key))
 
         if access >= 0.75:
-            notes.append({"impact": "positive", "text": f"Good availability of {noun} ({distance})"})
+            notes.append({"impact": "positive", "text": f"Good mapped availability of {noun} along this route ({distance})"})
         elif access >= 0.4:
-            notes.append({"impact": "neutral", "text": f"Moderate access to {noun} ({distance})"})
+            notes.append({"impact": "neutral", "text": f"Moderate access to mapped {noun} ({distance})"})
         else:
-            notes.append({"impact": "negative", "text": f"Limited access to {noun} ({distance})"})
+            notes.append({"impact": "negative", "text": f"Limited mapped {noun} along this route ({distance})"})
 
     return score, notes
 
@@ -129,64 +147,150 @@ def score_activity(metrics):
     coverage = metrics.get("activity_coverage")
 
     if coverage is None:
-        return None, [{
-            "impact": "neutral",
-            "text": "Street-activity data is temporarily unavailable, so it was not scored",
-        }]
+        return _missing("Street-activity data was unavailable, so it was not scored")
 
     # 70% of the route passing shops / transit / food is treated as
-    # fully "active"; few urban routes exceed that.
+    # fully "active"; few routes exceed that.
     score = min(100.0, coverage / 0.7 * 100)
     quiet = 1 - coverage
 
     if coverage >= 0.6:
-        notes = [{"impact": "positive", "text": f"Busy surroundings: shops, food places or transit stops along {_pct(coverage)} of the route"}]
+        notes = [{"impact": "positive", "text": f"Mapped shops, food places or transit stops are close to {_pct(coverage)} of the route"}]
     elif coverage >= 0.3:
-        notes = [{"impact": "negative", "text": f"Some sections may have lower activity (about {_pct(quiet)} of the route has few nearby shops or services)"}]
+        notes = [{"impact": "neutral", "text": f"About {_pct(quiet)} of the route has few mapped shops or services nearby"}]
     else:
-        notes = [{"impact": "negative", "text": f"Mostly quiet route: {_pct(quiet)} of it has few nearby shops, services or transit stops"}]
+        notes = [{"impact": "negative", "text": f"Mostly quiet by mapped data: {_pct(quiet)} of the route has few shops, services or transit stops nearby"}]
 
     longest_quiet = metrics.get("longest_quiet_km") or 0
 
     if coverage >= 0.3 and longest_quiet >= 0.5:
-        notes.append({"impact": "negative", "text": f"Longest quiet stretch is about {longest_quiet} km"})
+        notes.append({"impact": "negative", "text": f"Longest stretch without mapped activity is about {longest_quiet} km"})
+
+    return score, notes
+
+
+def score_surroundings(metrics):
+
+    share = metrics.get("built_up_share")
+
+    if share is None:
+        return _missing("Building data was unavailable for this area, so surroundings were not scored")
+
+    # 85% of the route with buildings close by counts as fully built up.
+    score = min(100.0, share / 0.85 * 100)
+    longest = metrics.get("longest_unbuilt_km") or 0
+
+    # One long empty stretch matters more than its share of the route.
+    score -= min(30.0, 10.0 * max(0.0, longest - 0.5))
+    score = max(0.0, score)
+
+    if share >= 0.75:
+        notes = [{"impact": "positive", "text": f"Buildings are mapped close to {_pct(share)} of the route, so people are likely nearby"}]
+    elif share >= 0.4:
+        notes = [{"impact": "neutral", "text": f"Buildings are mapped close to {_pct(share)} of the route; the rest is more open"}]
+    else:
+        notes = [{"impact": "negative", "text": f"Few mapped buildings along this route (only {_pct(share)} of it is close to any), so it may feel isolated"}]
+
+    if longest >= 0.5:
+        notes.append({"impact": "negative", "text": f"Longest stretch with no mapped buildings nearby is about {longest} km"})
 
     return score, notes
 
 
 def score_lighting(metrics, is_day):
 
-    lit_ratio = metrics.get("lit_ratio")
-    tagged = metrics.get("lit_tagged_segments", 0)
+    lit_share = metrics.get("lit_ratio")
+    coverage = metrics.get("lit_coverage")
 
-    if lit_ratio is None or tagged < MIN_LIT_SEGMENTS:
-        return None, [{
-            "impact": "neutral",
-            "text": "Not enough street-lighting information is mapped for this route",
-        }]
+    if lit_share is None or coverage is None or coverage < MIN_TAG_COVERAGE:
+        return _missing(
+            "Street lighting is not mapped for most of this route, so it was not scored"
+            " (unmapped does not mean unlit)"
+        )
 
-    score = lit_ratio * 100
+    score = lit_share * 100
 
-    if lit_ratio >= 0.75:
-        notes = [{"impact": "positive", "text": f"Most mapped streets on this route are lit ({_pct(lit_ratio)})"}]
-    elif lit_ratio >= 0.4:
-        notes = [{"impact": "neutral", "text": f"About {_pct(lit_ratio)} of mapped streets on this route are lit"}]
+    if lit_share >= 0.75:
+        notes = [{"impact": "positive", "text": f"Most mapped streets on this route are lit ({_pct(lit_share)})"}]
+    elif lit_share >= 0.4:
+        notes = [{"impact": "neutral", "text": f"About {_pct(lit_share)} of mapped streets on this route are lit"}]
     else:
-        notes = [{"impact": "negative", "text": f"Poor street lighting: only {_pct(lit_ratio)} of mapped streets are marked as lit"}]
+        notes = [{"impact": "negative", "text": f"Poor street lighting: only {_pct(lit_share)} of mapped streets are marked as lit"}]
 
-    if not is_day and lit_ratio < 0.75:
+    if not is_day and lit_share < 0.75:
         notes[0]["text"] += " (this matters more because it is currently dark)"
 
     return score, notes
 
 
+def score_road_safety(metrics, mode):
+    """
+    Traffic exposure for people on foot or bicycle. Averages whichever
+    of these have enough data: sidewalks, speed limits, and the share of
+    the route on fast main roads (always available when roads are).
+    """
+
+    if mode == "driving":
+        return None, []
+
+    major = metrics.get("major_road_share")
+
+    if major is None:
+        return _missing("Road data was unavailable, so traffic exposure was not scored")
+
+    parts = []
+    notes = []
+
+    # ---- share on fast main roads ----
+
+    parts.append(100 * (1 - major))
+
+    if major >= 0.5:
+        notes.append({"impact": "negative", "text": f"{_pct(major)} of the route follows main roads with faster traffic"})
+    elif major <= 0.15:
+        notes.append({"impact": "positive", "text": "The route mostly avoids main roads with fast traffic"})
+
+    # ---- sidewalks ----
+
+    sidewalk = metrics.get("sidewalk_share")
+    sidewalk_coverage = metrics.get("sidewalk_coverage")
+
+    if (
+        mode == "walking"
+        and sidewalk is not None
+        and sidewalk_coverage is not None
+        and sidewalk_coverage >= MIN_TAG_COVERAGE
+    ):
+        parts.append(100 * sidewalk)
+
+        if sidewalk >= 0.6:
+            notes.append({"impact": "positive", "text": f"Sidewalks are mapped along {_pct(sidewalk)} of the streets with sidewalk data"})
+        elif sidewalk < 0.3:
+            notes.append({"impact": "negative", "text": "Many streets on this route are mapped without sidewalks"})
+    elif mode == "walking":
+        notes.append({"impact": "neutral", "text": "Sidewalk data is mostly unmapped for this route, so it was not scored"})
+
+    # ---- speed limits ----
+
+    speed = metrics.get("maxspeed_mean_kmh")
+    speed_coverage = metrics.get("maxspeed_coverage")
+
+    if speed is not None and speed_coverage is not None and speed_coverage >= MIN_TAG_COVERAGE:
+        # 30 km/h or less is fully calm; 80 km/h or more scores zero.
+        parts.append(max(0.0, min(100.0, (80 - speed) / 50 * 100)))
+
+        if speed >= 60:
+            notes.append({"impact": "negative", "text": f"Posted speed limits average {round(speed)} km/h along this route"})
+        elif speed <= 40:
+            notes.append({"impact": "positive", "text": f"Posted speed limits are low (about {round(speed)} km/h)"})
+
+    return sum(parts) / len(parts), notes
+
+
 def score_weather(weather):
 
     if not weather:
-        return None, [{
-            "impact": "neutral",
-            "text": "Weather data is temporarily unavailable, so it was not scored",
-        }]
+        return _missing("Weather data was unavailable, so it was not scored")
 
     score = 100.0
     notes = []
@@ -234,7 +338,7 @@ def score_weather(weather):
 
 def calculate_safety_score(metrics, weather, mode="walking"):
     """
-    metrics: output of route_analyzer.measure_route
+    metrics: measurements from route_analyzer.measure_route
     weather: averaged weather reading for the route, or None
     """
 
@@ -245,7 +349,9 @@ def calculate_safety_score(metrics, weather, mode="walking"):
     results = {
         "emergency": score_emergency(metrics),
         "activity": score_activity(metrics),
+        "surroundings": score_surroundings(metrics),
         "lighting": score_lighting(metrics, is_day),
+        "road_safety": score_road_safety(metrics, mode),
         "weather": score_weather(weather),
     }
 
@@ -330,33 +436,62 @@ def calculate_safety_score(metrics, weather, mode="walking"):
 
 
 # ==================================================
-# ROUTE CATEGORIES
+# ROUTE CATEGORIES AND RECOMMENDATION
 # ==================================================
+
+def _quickest(routes):
+    return min(routes, key=lambda r: (r["duration_min"], r["distance_km"]))
+
 
 def categorize_routes(routes):
     """
-    Tags routes as "safest", "balanced" and "fastest" (a route can
-    hold more than one tag) and returns the recommended route, which
-    is always the safest one: LumaPath is safety-first, and the
-    balanced / fastest options are one tap away.
-    """
+    Tags routes "safest", "balanced" and "fastest" (a route can hold
+    several tags) and decides the recommendation. Deterministic:
 
-    scored = [r for r in routes if r.get("safety_score") is not None]
+      fastest   the quickest route (ties: the higher score).
+      safest    the quickest route among those within SCORE_TIE_MARGIN
+                points of the highest score.
+      balanced  the best mix of safety (50%), time (30%) and distance
+                (20%) among scored routes.
+
+    The recommendation is the safest route, but ONLY when that is
+    defensible: some route must have a score, and the best score must
+    not rest on low-confidence data. Otherwise there is no
+    recommendation ("unavailable") and the quickest route is merely
+    the default selection, never labelled as a safety recommendation.
+
+    Returns {"state", "route_id", "reason", "default_route_id"}:
+      state  recommended | tie | close | single | unavailable
+    """
 
     for route in routes:
         route["categories"] = []
 
     if not routes:
-        return None
+        return {"state": "unavailable", "route_id": None, "reason": None, "default_route_id": None}
 
-    fastest = min(routes, key=lambda r: r["duration_min"])
+    fastest = min(
+        routes,
+        key=lambda r: (r["duration_min"], -(r.get("safety_score") or 0), r["distance_km"]),
+    )
     fastest["categories"].append("fastest")
 
-    if not scored:
-        return fastest
+    scored = [r for r in routes if r.get("safety_score") is not None]
 
-    # Ties go to the quicker route.
-    safest = max(scored, key=lambda r: (r["safety_score"], -r["duration_min"]))
+    if not scored:
+        return {
+            "state": "unavailable",
+            "route_id": None,
+            "reason": (
+                "Safety data is currently unavailable, so no route can be "
+                "recommended as safest. The quickest route is selected."
+            ),
+            "default_route_id": fastest["id"],
+        }
+
+    top_score = max(r["safety_score"] for r in scored)
+    near_top = [r for r in scored if top_score - r["safety_score"] <= SCORE_TIE_MARGIN]
+    safest = _quickest(near_top)
     safest["categories"].append("safest")
 
     min_duration = min(r["duration_min"] for r in scored) or 1
@@ -370,7 +505,57 @@ def categorize_routes(routes):
             1,
         )
 
-    balanced = max(scored, key=lambda r: r["balance_score"])
+    balanced = max(scored, key=lambda r: (r["balance_score"], -r["duration_min"]))
     balanced["categories"].append("balanced")
 
-    return safest
+    # ---- is a recommendation defensible? ----
+
+    if CONFIDENCE_RANK[safest.get("data_confidence", "low")] == 0:
+        return {
+            "state": "unavailable",
+            "route_id": None,
+            "reason": (
+                "Too much safety data was unavailable to recommend a safest "
+                "route with confidence. The quickest route is selected."
+            ),
+            "default_route_id": fastest["id"],
+        }
+
+    others = [r for r in scored if r is not safest]
+
+    if not others:
+        return {
+            "state": "single",
+            "route_id": safest["id"],
+            "reason": "This was the only distinct route found for this trip.",
+            "default_route_id": safest["id"],
+        }
+
+    best_other = max(r["safety_score"] for r in others)
+    gap = safest["safety_score"] - best_other
+
+    if gap <= SCORE_TIE_MARGIN and len(near_top) > 1:
+        state = "tie"
+        reason = (
+            "Several routes have practically the same safety score, so the "
+            "quickest of them is recommended."
+        )
+    elif gap >= 5:
+        state = "recommended"
+        reason = (
+            f"Highest safety score of the {len(routes)} routes "
+            f"({gap} points ahead of the next best)."
+        )
+    else:
+        state = "close"
+        reason = (
+            f"Highest safety score of the {len(routes)} routes, though the "
+            "scores are close - compare the alternatives if time matters more."
+        )
+
+    return {
+        "state": state,
+        "route_id": safest["id"],
+        "reason": reason,
+        "default_route_id": safest["id"],
+    }

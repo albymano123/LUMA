@@ -27,6 +27,7 @@ ROAD = {
 }
 SHAPE = {"directness": 0.9, "turns_per_km": 2.0}
 EMERGENCY = {"hospital_median_m": 800, "police_median_m": 1200}
+SURROUNDINGS = {"built_up_share": 0.8, "longest_unbuilt_km": 0.3}
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +53,7 @@ def test_no_shipped_model_or_synthetic_dataset():
 
 
 def test_untrained_reports_status_and_no_score():
-    result = predict_model.estimate_for_route(SHAPE, ROAD, EMERGENCY, "walking")
+    result = predict_model.estimate_for_route(SHAPE, ROAD, SURROUNDINGS, EMERGENCY, "walking")
 
     assert result["status"] == "not_trained"
     assert result["expected_incidents_per_km"] is None
@@ -60,7 +61,7 @@ def test_untrained_reports_status_and_no_score():
 
 
 def test_feature_row_keeps_missing_as_nan_not_zero():
-    row = feature_row(SHAPE, {"available": False}, {"hospital_median_m": None})
+    row = feature_row(SHAPE, {"available": False}, {}, {"hospital_median_m": None})
 
     assert list(row) == FEATURE_COLUMNS
     assert math.isnan(row["sidewalk_share"])
@@ -90,7 +91,7 @@ def synthetic_table(rows=600, signal=True, seed=0):
         table[column] = rng.random(rows)
 
     rate = 1 + (6 * table["dead_ends_per_km"] if signal else 0)
-    table["incident_count"] = rng.poisson(rate * 0.5)
+    table["incident_count"] = rng.poisson(np.broadcast_to(rate * 0.5, rows))
     table["incidents_per_km"] = table["incident_count"] / table["length_km"]
 
     return table
@@ -104,15 +105,15 @@ def test_trained_model_is_used_only_when_validated(tmp_path):
     assert metadata["validated"]
 
     predict_model.reset_cache()
-    ready = predict_model.estimate_for_route(SHAPE, ROAD, EMERGENCY, "walking")
+    ready = predict_model.estimate_for_route(SHAPE, ROAD, SURROUNDINGS, EMERGENCY, "walking")
 
     assert ready["status"] == "ready"
     assert ready["expected_incidents_per_km"] >= 0
     assert ready["trained_on"]["area"] == "test"
 
     # Wrong travel mode and missing road data are refused, not guessed.
-    assert predict_model.estimate_for_route(SHAPE, ROAD, EMERGENCY, "driving")["status"] == "unsupported_mode"
-    assert predict_model.estimate_for_route(SHAPE, {"available": False}, EMERGENCY, "walking")["status"] == "unavailable"
+    assert predict_model.estimate_for_route(SHAPE, ROAD, SURROUNDINGS, EMERGENCY, "driving")["status"] == "unsupported_mode"
+    assert predict_model.estimate_for_route(SHAPE, {"available": False}, SURROUNDINGS, EMERGENCY, "walking")["status"] == "unavailable"
 
 
 def test_model_with_no_real_signal_is_not_validated(tmp_path):
@@ -124,7 +125,7 @@ def test_model_with_no_real_signal_is_not_validated(tmp_path):
 
     predict_model.reset_cache()
 
-    assert predict_model.estimate_for_route(SHAPE, ROAD, EMERGENCY, "walking")["status"] == "not_validated"
+    assert predict_model.estimate_for_route(SHAPE, ROAD, SURROUNDINGS, EMERGENCY, "walking")["status"] == "not_validated"
 
 
 def test_incident_file_is_validated(tmp_path):
@@ -148,10 +149,9 @@ def test_incident_file_is_validated(tmp_path):
 
 
 def test_windows_and_incident_counts():
-    nodes = [{"type": "node", "id": i, "lon": 76.26 + i * 0.0009, "lat": 9.93} for i in range(1, 12)]
-    way = {"type": "way", "id": 1, "nodes": list(range(1, 12)), "tags": {"highway": "residential"}}
+    coords = np.array([[76.26 + i * 0.0009, 9.93] for i in range(1, 12)])
 
-    windows = road_windows(nodes + [way])
+    windows = road_windows([{"coords": coords}])
 
     assert len(windows) == 2  # ~1 km of road cut into ~500 m windows
 

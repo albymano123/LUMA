@@ -8,6 +8,8 @@ import {
   Typography,
 } from "@mui/material";
 
+import "leaflet/dist/leaflet.css";
+
 import Navbar from "../components/Navbar";
 import RouteForm from "../components/RouteForm";
 import RouteStatus from "../components/RouteStatus";
@@ -17,20 +19,15 @@ import MapView from "../components/MapView";
 import MapLegend from "../components/MapLegend";
 
 import { describeApiError, getSafeRoute } from "../services/api";
+import { DATA_SOURCE_LABELS } from "../lib/format";
 
 const NAVBAR_HEIGHT = 56;
 const PANEL_WIDTH = 440;
 
-const SOURCE_LABELS = {
-  emergency_services: "emergency services",
-  street_activity: "street activity & lighting",
-  weather: "weather",
-};
-
 function MissingDataNotice({ dataSources }) {
   const missing = Object.entries(dataSources || {})
     .filter(([, available]) => !available)
-    .map(([key]) => SOURCE_LABELS[key] || key);
+    .map(([key]) => DATA_SOURCE_LABELS[key] || key);
 
   if (!missing.length) {
     return null;
@@ -40,6 +37,19 @@ function MissingDataNotice({ dataSources }) {
     <Alert severity="warning" sx={{ mb: 1.5 }}>
       Some safety data couldn't be loaded right now ({missing.join(", ")}).
       Scores use the data that was available and show lower confidence.
+    </Alert>
+  );
+}
+
+// Shown when no route can honestly be called the safest.
+function NoRecommendationNotice({ recommendation }) {
+  if (!recommendation || recommendation.state !== "unavailable") {
+    return null;
+  }
+
+  return (
+    <Alert severity="info" sx={{ mb: 1.5 }} data-testid="no-recommendation">
+      {recommendation.reason}
     </Alert>
   );
 }
@@ -55,6 +65,9 @@ function MapPage() {
   const [error, setError] = useState("");
   const [safeRouteData, setSafeRouteData] = useState(null);
   const [selectedRoute, setSelectedRoute] = useState(null);
+  // What the user asked for (safest / balanced / fastest), if anything.
+  // Kept separately from the route because one route can hold several tags.
+  const [preference, setPreference] = useState(null);
   const [focusService, setFocusService] = useState(null);
   const [notice, setNotice] = useState("");
 
@@ -71,6 +84,7 @@ function MapPage() {
     requestRef.current?.abort();
     setSafeRouteData(null);
     setSelectedRoute(null);
+    setPreference(null);
     setFocusService(null);
 
     if (!from || !to) {
@@ -96,7 +110,7 @@ function MapPage() {
       }
 
       setSafeRouteData(result);
-      setSelectedRoute(result.recommended_route_id ?? result.routes[0].id);
+      setSelectedRoute(result.default_route_id ?? result.routes[0].id);
       setStatus("success");
     } catch (requestError) {
       if (controller.signal.aborted) return;
@@ -135,7 +149,27 @@ function MapPage() {
 
   const routes = safeRouteData?.routes;
   const selected = routes?.find((route) => route.id === selectedRoute);
-  const recommendedId = safeRouteData?.recommended_route_id;
+  const recommendedId = safeRouteData?.recommended_route_id ?? null;
+
+  const chooseRoute = (routeId) => {
+    setSelectedRoute(routeId);
+
+    // Tapping a route card keeps the preference only if it still fits.
+    const route = routes?.find((item) => item.id === routeId);
+
+    if (!route?.categories.includes(preference)) {
+      setPreference(null);
+    }
+  };
+
+  const choosePreference = (category) => {
+    const route = routes?.find((item) => item.categories.includes(category));
+
+    if (route) {
+      setSelectedRoute(route.id);
+      setPreference(category);
+    }
+  };
 
 
   // ==================================================
@@ -192,11 +226,11 @@ function MapPage() {
             routes={routes}
             selectedRouteId={selectedRoute}
             recommendedRouteId={recommendedId}
-            onSelectRoute={setSelectedRoute}
+            onSelectRoute={chooseRoute}
             focusService={focusService}
           />
 
-          {routes && <MapLegend hideRecommended={selectedRoute === recommendedId} />}
+          {routes && <MapLegend hideRecommended={!recommendedId || selectedRoute === recommendedId} />}
         </Box>
 
         {/* ---------------- RESULTS ---------------- */}
@@ -224,24 +258,29 @@ function MapPage() {
                   </Typography>
 
                   <Typography variant="caption" color="text.secondary">
-                    Scores from open data
+                    Scores from open map data
                   </Typography>
                 </Stack>
 
                 <MissingDataNotice dataSources={safeRouteData.data_sources} />
+                <NoRecommendationNotice recommendation={safeRouteData.recommendation} />
 
                 <RouteComparison
                   safeRouteData={safeRouteData}
                   selectedRoute={selectedRoute}
-                  setSelectedRoute={setSelectedRoute}
+                  preference={preference}
+                  onSelectRoute={chooseRoute}
+                  onSelectPreference={choosePreference}
                 />
               </Box>
 
               <RouteDetails
                 route={selected}
-                isRecommended={selectedRoute === recommendedId}
-                recommendationReason={safeRouteData.recommendation_reason}
+                recommendation={safeRouteData.recommendation}
+                preference={preference}
+                routes={routes}
                 dataSources={safeRouteData.data_sources}
+                geoSource={safeRouteData.geo_source}
                 disclaimer={safeRouteData.disclaimer}
                 onFocusService={setFocusService}
               />

@@ -1,13 +1,13 @@
 """
 Builds a training table from REAL incident records.
 
-    python -m ml.build_dataset --incidents incidents.csv --bbox 9.90,76.24,9.99,76.32 --area "Kochi centre" --mode walking
+    python -m ml.build_dataset --incidents incidents.csv --bbox 9.90,76.24,9.99,76.32 --area "Kochi centre"
 
 incidents.csv needs the columns lat and lon and may have timestamp,
 category, severity (see ml/README.md). Nothing is invented: every
-training row is a real stretch of OpenStreetMap road, described by the
-same features the live API computes, labelled with how many real
-incidents were recorded along it.
+training row is a real stretch of OpenStreetMap road from the local
+geo-database, described by the same features the live API computes
+and labelled with how many real incidents were recorded along it.
 
 Only the labels come from incident data. The features are environment
 features. Both halves are stored in the output so the model's inputs
@@ -18,26 +18,19 @@ import argparse
 import json
 import sys
 
-import httpx
 import numpy as np
 import pandas as pd
 
-from emergency_service import EMERGENCY_AMENITIES
 from geo import distance_matrix_m, haversine_m, resample_line
+from geodata.store import GeoStore
 from ml.features import feature_row
-from road_features import (
-    build_bbox_road_query,
-    parse_road_network,
-    road_network_features,
-    route_shape_features,
-)
+from road_features import build_network, road_network_features, route_shape_features
+from settings import BUILT_UP_MIN_BUILDINGS, GEO_DB_PATH
 
 
 WINDOW_M = 500
 MIN_WINDOW_M = 250
 INCIDENT_RADIUS_M = 40
-
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 
 # ==================================================
@@ -81,31 +74,20 @@ def load_incidents(path):
 # WINDOWS: ~500 m stretches of real road
 # ==================================================
 
-def road_windows(elements, window_m=WINDOW_M, min_window_m=MIN_WINDOW_M):
+def road_windows(ways, window_m=WINDOW_M, min_window_m=MIN_WINDOW_M):
     """
-    Cuts every OSM way into consecutive stretches of about window_m
-    metres. Returns lists of [lon, lat] points.
+    Cuts every way (dict with "coords") into consecutive stretches of
+    about window_m metres. Returns lists of [lon, lat] points.
     """
-
-    coordinates = {
-        e["id"]: [e["lon"], e["lat"]]
-        for e in elements
-        if e.get("type") == "node" and "lat" in e
-    }
 
     windows = []
 
-    for way in elements:
-
-        if way.get("type") != "way" or "highway" not in way.get("tags", {}):
-            continue
-
-        points = [coordinates[n] for n in way.get("nodes", []) if n in coordinates]
+    for way in ways:
 
         current = []
         length = 0.0
 
-        for point in points:
+        for point in way["coords"].tolist():
 
             if current:
                 length += haversine_m(current[-1][1], current[-1][0], point[1], point[0])
@@ -148,10 +130,6 @@ def count_incidents(window, incident_points, radius_m=INCIDENT_RADIUS_M):
     return int((distance_matrix_m(near_box, samples).min(axis=1) <= radius_m).sum())
 
 
-# ==================================================
-# EMERGENCY SERVICES
-# ==================================================
-
 def median_nearest(window, points):
     """Median over the window of the distance to the nearest point, or None."""
 
@@ -163,62 +141,34 @@ def median_nearest(window, points):
     return float(np.median(distance_matrix_m(samples, points).min(axis=1)))
 
 
-def _overpass(query):
-
-    response = httpx.post(
-        OVERPASS_URL,
-        data={"data": query},
-        timeout=180,
-        headers={"User-Agent": "LumaPath/1.0 (dataset builder)"},
-    )
-    response.raise_for_status()
-
-    return response.json()
-
-
-def fetch_emergency_points(south, west, north, east):
-    """Hospital/clinic and police points, searched ~3 km beyond the area (the walking radius the live API uses)."""
-
-    pad = 0.03
-    query = (
-        "[out:json][timeout:90];"
-        f'nwr["amenity"~"^({"|".join(EMERGENCY_AMENITIES)})$"]'
-        f"({south - pad},{west - pad},{north + pad},{east + pad});"
-        "out tags center qt;"
-    )
-
-    hospitals, police = [], []
-
-    for element in _overpass(query).get("elements", []):
-
-        if "lat" in element:
-            position = (element["lon"], element["lat"])
-        elif "center" in element:
-            position = (element["center"]["lon"], element["center"]["lat"])
-        else:
-            continue
-
-        amenity = element.get("tags", {}).get("amenity")
-
-        if amenity in ("hospital", "clinic"):
-            hospitals.append(position)
-        elif amenity == "police":
-            police.append(position)
-
-    return (
-        np.array(hospitals, dtype=float).reshape(-1, 2),
-        np.array(police, dtype=float).reshape(-1, 2),
-    )
-
-
 # ==================================================
 # BUILD
 # ==================================================
 
-def build_dataset(elements, incidents, hospitals, police, years=None):
+def _surroundings(window, building_counts):
+
+    samples = resample_line(window, spacing_m=50, max_points=100)
+
+    if len(samples) < 2 or building_counts is None:
+        return {}
+
+    built = building_counts(samples) >= BUILT_UP_MIN_BUILDINGS
+    run = longest = 0
+
+    for value in ~built:
+        run = run + 1 if value else 0
+        longest = max(longest, run)
+
+    return {
+        "built_up_share": float(built.mean()),
+        "longest_unbuilt_km": longest * 0.05,
+    }
+
+
+def build_dataset(ways, incidents, hospitals, police, building_counts=None, years=None):
     """One row per road window: features + real incident count + label."""
 
-    network = parse_road_network(elements)
+    network = build_network(ways)
 
     if network is None:
         raise ValueError("no roads found in the area")
@@ -226,7 +176,7 @@ def build_dataset(elements, incidents, hospitals, police, years=None):
     incident_points = incidents[["lon", "lat"]].to_numpy(dtype=float)
     rows = []
 
-    for index, window in enumerate(road_windows(elements)):
+    for index, window in enumerate(road_windows(ways)):
 
         road = road_network_features(window, network)
 
@@ -252,7 +202,7 @@ def build_dataset(elements, incidents, hospitals, police, years=None):
             # The label: real recorded incidents per km (per year if
             # the file has timestamps).
             "incidents_per_km": count / length_km / (years or 1),
-            **feature_row(shape, road, emergency),
+            **feature_row(shape, road, _surroundings(window, building_counts), emergency),
         })
 
     return pd.DataFrame(rows)
@@ -264,11 +214,13 @@ def main(argv=None):
     parser.add_argument("--incidents", required=True, help="CSV of real incidents (lat, lon, ...)")
     parser.add_argument("--bbox", required=True, help="south,west,north,east of the area to cover")
     parser.add_argument("--area", default="", help="name of the area, stored with the model")
-    parser.add_argument("--mode", default="walking", choices=["walking", "cycling", "driving"])
+    parser.add_argument("--db", default=GEO_DB_PATH, help="local geo-database")
     parser.add_argument("--out", default="ml/training_windows.csv")
     args = parser.parse_args(argv)
 
     south, west, north, east = (float(v) for v in args.bbox.split(","))
+    # Training and prediction both use walking-mode features.
+    mode = "walking"
 
     incidents, report = load_incidents(args.incidents)
     print("Incidents:", report)
@@ -278,12 +230,19 @@ def main(argv=None):
     ]
     print(f"{len(inside)} of {len(incidents)} incidents fall inside the area")
 
-    print("Fetching roads from Overpass (can take a minute)...")
-    elements = _overpass(build_bbox_road_query(south, west, north, east))["elements"]
+    store = GeoStore(args.db)
+    corners = [[[west, south], [east, north]]]
 
-    hospitals, police = fetch_emergency_points(south, west, north, east)
+    ways = store.ways_in_box(west, east, south, north)
+    services = store.emergency_services(corners, 3000)
 
-    table = build_dataset(elements, inside, hospitals, police, years=report["years_covered"])
+    hospitals = np.array([[s["lon"], s["lat"]] for s in services if s["kind"] in ("hospital", "clinic")]).reshape(-1, 2)
+    police = np.array([[s["lon"], s["lat"]] for s in services if s["kind"] == "police"]).reshape(-1, 2)
+
+    table = build_dataset(
+        ways, inside, hospitals, police,
+        building_counts=store.building_counts, years=report["years_covered"],
+    )
     table.to_csv(args.out, index=False)
 
     with open(args.out + ".meta.json", "w", encoding="utf8") as file:
@@ -291,9 +250,10 @@ def main(argv=None):
             {
                 **report,
                 "area": args.area,
-                "mode": args.mode,
+                "mode": mode,
                 "bbox": args.bbox,
                 "incidents_in_area": int(len(inside)),
+                "geo_database": store.describe(),
             },
             file,
             indent=2,

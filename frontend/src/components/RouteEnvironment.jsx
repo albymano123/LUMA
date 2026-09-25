@@ -19,28 +19,45 @@ function distance(metres) {
   return metres < 1000 ? `${Math.round(metres / 50) * 50} m` : `${(metres / 1000).toFixed(1)} km`;
 }
 
+// Tag-based values are only shown when enough of the route carries the
+// tag (mirrors the backend rule); otherwise the map is simply silent.
+const MIN_COVERAGE = 0.3;
+
+function tagged(value, coverage, format) {
+  return value == null || coverage == null || coverage < MIN_COVERAGE
+    ? NOT_MAPPED
+    : format(value);
+}
+
 function buildRows(features) {
   const shape = features.route_shape ?? {};
   const road = features.road_network ?? {};
+  const surroundings = features.surroundings ?? {};
   const emergency = features.emergency ?? {};
   const rows = [];
+
+  if (surroundings.built_up_share != null) {
+    rows.push(
+      ["Buildings close to the route", percent(surroundings.built_up_share)],
+      [
+        "Longest stretch without buildings",
+        surroundings.longest_unbuilt_km >= 0.1 ? `${surroundings.longest_unbuilt_km} km` : "None over 100 m",
+      ],
+    );
+  }
 
   if (road.available) {
     rows.push(
       ["Main roads", percent(road.major_road_share) ?? NOT_MAPPED],
       ["Local streets", percent(road.local_road_share) ?? NOT_MAPPED],
       ["Footpaths and cycle paths", percent(road.pedestrian_cycle_road_share) ?? NOT_MAPPED],
-      [
-        "Streets with sidewalks",
-        road.sidewalk_share == null
-          ? NOT_MAPPED
-          : `${percent(road.sidewalk_share)} of ${road.sidewalk_tagged_segments} mapped segments`,
-      ],
+      ["Streets with sidewalks", tagged(road.sidewalk_share, road.sidewalk_coverage, percent)],
       [
         "Speed limit (average)",
-        road.maxspeed_mean_kmh == null ? NOT_MAPPED : `${Math.round(road.maxspeed_mean_kmh)} km/h`,
+        tagged(road.maxspeed_mean_kmh, road.maxspeed_coverage, (v) => `${Math.round(v)} km/h`),
       ],
-      ["Paved surface", road.paved_share == null ? NOT_MAPPED : percent(road.paved_share)],
+      ["Street lighting mapped as lit", tagged(road.lit_share, road.lit_coverage, percent)],
+      ["Paved surface", tagged(road.paved_share, road.surface_coverage, percent)],
       ["Junctions", `${road.junctions} (${road.junctions_per_km} per km)`],
       ["Dead-end streets nearby", `${road.dead_ends} (${road.dead_ends_per_km} per km)`],
     );
@@ -84,8 +101,9 @@ function RouteEnvironment({ route }) {
         </Typography>
 
         <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 1.5 }}>
-          What OpenStreetMap says about the roads on this route. These are map
-          facts, not crime or incident data.
+          What OpenStreetMap says about this route. These are map facts, not
+          crime or incident data, and &ldquo;Not mapped&rdquo; means nobody has added
+          that detail to the map, not that it is absent.
         </Typography>
 
         {!roadAvailable && (

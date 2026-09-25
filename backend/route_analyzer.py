@@ -1,29 +1,31 @@
 """
 Turns raw candidate routes into analysed, explained, ranked routes.
 
-External data is fetched once for all routes, in parallel:
+Map data comes from geo_context (the local Kerala database, or live
+Overpass outside it) and weather from Open-Meteo. Both are fetched once
+for ALL routes, in parallel, and each route is then measured locally
+against that shared data:
 
-    OSRM routes ─┬─> Overpass (one query for every route)
-                 └─> Open-Meteo (one query for every sample point)
+    OSRM routes ─┬─> geo_context   (local database / Overpass fallback)
+                 └─> Open-Meteo    (one request for every sample point)
 
-and each route is then measured locally against that shared data.
+Nothing here invents data: whatever could not be loaded is reported
+as unavailable and the safety engine lowers its confidence.
 """
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 
 import numpy as np
 
-from emergency_service import (
-    EMERGENCY_RADIUS_M,
-    ACTIVITY_RADIUS_M,
-    get_route_context,
-)
 from geo import distance_matrix_m, haversine_m, resample_line
+from geo_context import get_geo_context
 from ml.predict_model import estimate_for_route
-from road_features import get_road_network, road_network_features, route_shape_features
+from road_features import road_network_features, route_shape_features
 from safety import calculate_safety_score, categorize_routes
+from settings import ACTIVITY_RADIUS_M, BUILT_UP_MIN_BUILDINGS, EMERGENCY_RADIUS_M
 from weather_service import get_weather_for_points
 
 
@@ -33,10 +35,8 @@ logger = logging.getLogger("lumapath.analyzer")
 SAMPLE_SPACING_M = 100
 SAMPLE_MAX_POINTS = 400
 
-# A lit-tagged road counts towards a route if its centre is this
-# close to the route (Overpass matched it within 30 m of the line,
-# but the way's centre can sit further along the road).
-LIT_ASSIGN_RADIUS_M = 150
+BUILDING_SPACING_M = 50
+BUILDING_MAX_POINTS = 600
 
 # Per kind, so dense hospital data cannot crowd police stations out
 # of the list.
@@ -45,13 +45,14 @@ MAX_SERVICES_PER_KIND = 15
 DISCLAIMER = (
     "Safety scores are estimates based on available open data "
     "(OpenStreetMap and Open-Meteo). They are not a guarantee of "
-    "safety. Stay aware of your surroundings and contact local "
+    "safety and are not built from crime records. Map completeness "
+    "varies. Stay aware of your surroundings and contact local "
     "emergency services if you feel unsafe."
 )
 
 
 # ==================================================
-# MEASURE ONE ROUTE AGAINST THE SHARED OSM CONTEXT
+# MEASURE ONE ROUTE AGAINST THE SHARED MAP DATA
 # ==================================================
 
 def _cumulative_km(samples):
@@ -104,14 +105,13 @@ def _access_score(nearest_m, mode):
 
 
 def measure_route(coordinates, context, mode="walking"):
+    """All measurements for one route; anything unavailable stays None."""
 
     samples = resample_line(
         coordinates,
         spacing_m=SAMPLE_SPACING_M,
         max_points=SAMPLE_MAX_POINTS,
     )
-
-    along_km = _cumulative_km(samples)
 
     metrics = {
         "hospital_access": None,
@@ -120,26 +120,47 @@ def measure_route(coordinates, context, mode="walking"):
         "police_median_m": None,
         "activity_coverage": None,
         "longest_quiet_km": None,
+        "built_up_share": None,
+        "longest_unbuilt_km": None,
         "lit_ratio": None,
+        "lit_coverage": None,
         "lit_tagged_segments": 0,
         "services": [],
     }
 
+    road = road_network_features(coordinates, context.get("network"))
+    metrics["road"] = road
+
+    if road.get("available"):
+        metrics.update({
+            "lit_ratio": road["lit_share"],
+            "lit_coverage": road["lit_coverage"],
+            "lit_tagged_segments": road["lit_tagged_segments"],
+            "major_road_share": road["major_road_share"],
+            "sidewalk_share": road["sidewalk_share"],
+            "sidewalk_coverage": road["sidewalk_coverage"],
+            "maxspeed_mean_kmh": road["maxspeed_mean_kmh"],
+            "maxspeed_coverage": road["maxspeed_coverage"],
+        })
+
     if not samples:
         return metrics
+
+    along_km = _cumulative_km(samples)
 
     if context["emergency_available"]:
         metrics.update(_measure_emergency(samples, along_km, context, mode))
 
-    if context["street_available"]:
-        metrics.update(_measure_street(samples, along_km, context))
+    if context["activity_available"]:
+        metrics.update(_measure_activity(samples, along_km, context))
+
+    if context.get("buildings_available") and context.get("building_counts"):
+        metrics.update(_measure_buildings(coordinates, context))
 
     return metrics
 
 
 def _measure_emergency(samples, along_km, context, mode):
-
-    # ---------------- emergency services ----------------
 
     services = context["emergency"]
     service_points = [[s["lon"], s["lat"]] for s in services]
@@ -193,9 +214,7 @@ def _measure_emergency(samples, along_km, context, mode):
     }
 
 
-def _measure_street(samples, along_km, context):
-
-    # ---------------- street activity ----------------
+def _measure_activity(samples, along_km, context):
 
     activity_coverage = 0.0
     longest_quiet_km = round(along_km[-1], 2)
@@ -210,37 +229,30 @@ def _measure_street(samples, along_km, context):
         activity_coverage = float(active.mean())
         longest_quiet_km = _longest_run_km(~active, along_km)
 
-    # ---------------- lighting ----------------
-
-    lit_values = []
-
-    if context["lit_segments"]:
-        segment_points = [
-            [s["lon"], s["lat"]] for s in context["lit_segments"]
-        ]
-
-        segment_distances = distance_matrix_m(
-            segment_points,
-            samples,
-        ).min(axis=1)
-
-        lit_values = [
-            segment["lit"]
-            for segment, distance in zip(
-                context["lit_segments"],
-                segment_distances,
-            )
-            if distance <= LIT_ASSIGN_RADIUS_M
-        ]
-
     return {
         "activity_coverage": round(activity_coverage, 3),
         "longest_quiet_km": longest_quiet_km,
-        "lit_ratio": (
-            round(sum(lit_values) / len(lit_values), 3)
-            if lit_values else None
-        ),
-        "lit_tagged_segments": len(lit_values),
+    }
+
+
+def _measure_buildings(coordinates, context):
+    """How much of the route has mapped buildings nearby, and the longest empty stretch."""
+
+    samples = resample_line(
+        coordinates,
+        spacing_m=BUILDING_SPACING_M,
+        max_points=BUILDING_MAX_POINTS,
+    )
+
+    if len(samples) < 2:
+        return {}
+
+    counts = context["building_counts"](samples)
+    built = counts >= BUILT_UP_MIN_BUILDINGS
+
+    return {
+        "built_up_share": round(float(built.mean()), 3),
+        "longest_unbuilt_km": _longest_run_km(~built, _cumulative_km(samples)),
     }
 
 
@@ -310,16 +322,23 @@ def _combine_weather(readings):
 # ROUTE ENVIRONMENT FEATURES
 # ==================================================
 
-def _route_features(coordinates, road_network, metrics):
+def _route_features(coordinates, metrics):
     """
     Facts about the route's surroundings, each group labelled with
     where it came from. These are environment features, not safety
-    or crime data, and they do not change the rule-based score.
+    or crime data. They feed the experimental ML component and are
+    shown to the user as plain map facts.
     """
+
+    road = metrics.get("road") or {"available": False}
 
     return {
         "route_shape": route_shape_features(coordinates),
-        "road_network": road_network_features(coordinates, road_network),
+        "road_network": road,
+        "surroundings": {
+            "built_up_share": metrics.get("built_up_share"),
+            "longest_unbuilt_km": metrics.get("longest_unbuilt_km"),
+        },
         "emergency": {
             "hospital_median_m": metrics.get("hospital_median_m"),
             "police_median_m": metrics.get("police_median_m"),
@@ -327,6 +346,7 @@ def _route_features(coordinates, road_network, metrics):
         "sources": {
             "route_shape": "routing geometry",
             "road_network": "OpenStreetMap roads near the route",
+            "surroundings": "OpenStreetMap buildings near the route",
             "emergency": "OpenStreetMap hospitals, clinics and police stations",
         },
     }
@@ -336,42 +356,45 @@ def _route_features(coordinates, road_network, metrics):
 # ANALYZE ALL ROUTES
 # ==================================================
 
-def _recommendation_reason(recommended, routes):
+def _geo_source(context):
 
-    if recommended.get("safety_score") is None:
-        return (
-            "Safety data is currently unavailable, so the quickest "
-            "route is shown first."
-        )
+    if context["source"] == "local":
+        dataset = context["dataset"] or {}
+        return {
+            "type": "local",
+            "label": dataset.get("source") or "Local OpenStreetMap database",
+            "date": dataset.get("extract_date"),
+        }
 
-    others = [r for r in routes if r is not recommended and r.get("safety_score") is not None]
+    if context["source"] == "overpass":
+        return {
+            "type": "live",
+            "label": "OpenStreetMap via public Overpass servers",
+            "date": None,
+        }
 
-    if not others:
-        return "This was the only distinct route found for this trip."
+    return {"type": "none", "label": "No map data source available", "date": None}
 
-    best_other = max(r["safety_score"] for r in others)
-    gap = recommended["safety_score"] - best_other
 
-    if gap == 0:
-        return (
-            "Several routes share the highest safety score, so the "
-            "quickest of them is recommended."
-        )
+def _data_sources(context, weather_readings):
+    """Which data sets loaded. Only sets that this trip needed are listed."""
 
-    if gap >= 5:
-        return (
-            f"Highest safety score of the {len(routes)} routes "
-            f"({gap} points ahead of the next best)."
-        )
+    sources = {
+        "emergency_services": context["emergency_available"],
+        "street_activity": context["activity_available"],
+        "road_network": context["network_available"],
+        "weather": any(weather_readings),
+    }
 
-    return (
-        f"Highest safety score of the {len(routes)} routes, though the "
-        "scores are close - compare the alternatives if time matters more."
-    )
+    if context["source"] == "local":
+        sources["buildings"] = context["buildings_available"]
+
+    return sources
 
 
 async def analyze_all_routes(routes, mode="walking"):
 
+    started = time.monotonic()
     geometries = [route["geometry"]["coordinates"] for route in routes]
 
     weather_points = []
@@ -387,18 +410,11 @@ async def analyze_all_routes(routes, mode="walking"):
         route_point_indexes.append(indexes)
 
     context, weather_readings = await asyncio.gather(
-        get_route_context(geometries, mode),
+        get_geo_context(geometries, mode),
         get_weather_for_points(weather_points),
     )
 
-    # The road-environment query is optional extra detail. It runs only
-    # after the essential data arrived, so it can never compete with
-    # those queries for the public Overpass servers' rate limit.
-    road_network = (
-        await get_road_network(geometries)
-        if context["emergency_available"]
-        else None
-    )
+    fetched = time.monotonic()
 
     analyzed = []
 
@@ -410,19 +426,18 @@ async def analyze_all_routes(routes, mode="walking"):
         safety = calculate_safety_score(metrics, weather, mode)
 
         services = metrics.pop("services")
-
-        hospital_count = sum(s["kind"] in ("hospital", "clinic") for s in services)
-        police_count = sum(s["kind"] == "police" for s in services)
-        fire_count = sum(s["kind"] == "fire_station" for s in services)
-
-        route_features = _route_features(coordinates, road_network, metrics)
+        route_features = _route_features(coordinates, metrics)
 
         ml_estimate = estimate_for_route(
             route_features["route_shape"],
             route_features["road_network"],
+            route_features["surroundings"],
             route_features["emergency"],
             mode,
         )
+
+        # The detailed road measurements live in route_features.
+        metrics.pop("road", None)
 
         analyzed.append({
             **route,
@@ -430,35 +445,33 @@ async def analyze_all_routes(routes, mode="walking"):
             "metrics": metrics,
             "weather": weather,
             "emergency_services": _closest_per_kind(services),
-            "hospital_count": hospital_count,
-            "police_station_count": police_count,
-            "fire_station_count": fire_count,
+            "hospital_count": sum(s["kind"] in ("hospital", "clinic") for s in services),
+            "police_station_count": sum(s["kind"] == "police" for s in services),
+            "fire_station_count": sum(s["kind"] == "fire_station" for s in services),
             "route_features": route_features,
             "ml_estimate": ml_estimate,
         })
 
-    recommended = categorize_routes(analyzed)
+    recommendation = categorize_routes(analyzed)
 
     logger.info(
-        "Analysed %d routes; recommended %s (score %s)",
+        "Analysed %d routes via %s data (fetch %.2fs, measure %.2fs); recommendation: %s",
         len(analyzed),
-        recommended["name"] if recommended else None,
-        recommended.get("safety_score") if recommended else None,
+        context["source"],
+        fetched - started,
+        time.monotonic() - fetched,
+        recommendation["state"],
     )
 
     return {
         "routes": analyzed,
-        "recommended_route_id": recommended["id"] if recommended else None,
-        "recommendation_reason": (
-            _recommendation_reason(recommended, analyzed)
-            if recommended else None
-        ),
-        "data_sources": {
-            "emergency_services": context["emergency_available"],
-            "street_activity": context["street_available"],
-            "weather": any(weather_readings),
-            "road_network": road_network is not None,
-        },
+        "recommendation": recommendation,
+        # Kept at the top level for simple clients.
+        "recommended_route_id": recommendation["route_id"],
+        "recommendation_reason": recommendation["reason"],
+        "default_route_id": recommendation["default_route_id"],
+        "data_sources": _data_sources(context, weather_readings),
+        "geo_source": _geo_source(context),
         "disclaimer": DISCLAIMER,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

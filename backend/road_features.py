@@ -1,39 +1,38 @@
 """
-Real road-environment features for a route, taken from OpenStreetMap.
+Real road-environment features for a route, from OpenStreetMap data.
 
 These describe the ENVIRONMENT of a route: what kind of roads it uses,
-whether they have sidewalks, how many junctions and dead ends it
-passes, how twisty it is. They are not safety or crime data, and
-nothing here says a road is "unsafe" - only what the map says about it.
-They feed the (experimental) ML component and are shown to the user as
-plain facts; the rule-based score in safety.py stays the primary score.
+whether they have sidewalks or lighting, how many junctions and dead
+ends it passes, how twisty it is. They are not safety or crime data.
+The safety engine (safety.py) and the experimental ML component both
+consume them.
 
-Data flow:
+This module is pure computation (no network, no database), so the
+same code measures a live route, a route from the local geo-database,
+and a training window for ML.
 
-    Overpass ("way[highway]" near every route, one query)
-        -> parse_road_network()   segments, junctions, dead ends
-        -> road_network_features() per-route numbers
-
-The same two functions are used by ml/build_dataset.py, so a model
-trained later sees features computed exactly like the live ones.
+    ways (from the local database or Overpass)
+        -> build_network()          numpy segments, junctions, dead ends
+        -> road_network_features()  per-route numbers
 
 Every value that depends on OSM tagging is reported with how much of
 the route was actually tagged, and is None (not zero) when there is
 too little tagged data to say anything.
 """
 
-import asyncio
-import logging
 import math
-import re
 
 import numpy as np
 
-from emergency_service import _cached_fetch, _polyline_param
-from geo import bearing_rad, distance_matrix_m, haversine_m, line_length_m, resample_line
-
-
-logger = logging.getLogger("lumapath.roads")
+from geo import (
+    EARTH_RADIUS_M,
+    bearing_rad,
+    distance_matrix_m,
+    haversine_m,
+    line_length_m,
+    resample_line,
+)
+from road_tags import DEAD_END_HIGHWAYS, ROAD_CLASSES, SIDEWALK_CLASSES
 
 
 # ==================================================
@@ -58,146 +57,31 @@ MIN_MATCHED_SEGMENTS = 5
 # Fewer tagged segments than this and a tag-based ratio is not trusted.
 MIN_TAGGED_SEGMENTS = 4
 
-# Give up on this optional query quickly so results are never held up.
-ROAD_FETCH_TIMEOUT_S = 10
-
 SHARP_TURN_DEG = 45
 TURN_SPACING_M = 50
 
-ROAD_CLASSES = ("major", "local", "pedestrian_cycle", "other")
-
-_CLASS_OF = {}
-
-for _highway in (
-    "motorway", "motorway_link", "trunk", "trunk_link",
-    "primary", "primary_link", "secondary", "secondary_link",
-):
-    _CLASS_OF[_highway] = 0
-
-for _highway in (
-    "tertiary", "tertiary_link", "residential", "unclassified",
-    "living_street", "service",
-):
-    _CLASS_OF[_highway] = 1
-
-for _highway in ("footway", "pedestrian", "path", "steps", "cycleway"):
-    _CLASS_OF[_highway] = 2
-
-# Streets where a sidewalk could reasonably exist.
-_SIDEWALK_CLASSES = (0, 1)
-
-# Street types where a dead end is meaningful (driveways and service
-# lanes end in dead ends everywhere, so they are ignored).
-_DEAD_END_HIGHWAYS = {
-    "residential", "unclassified", "tertiary", "secondary", "primary",
-    "living_street",
-}
-
-_SIDEWALK_YES = {"both", "left", "right", "yes", "separate"}
-_SIDEWALK_NO = {"no", "none"}
-
-_PAVED = {
-    "paved", "asphalt", "concrete", "concrete:plates", "concrete:lanes",
-    "paving_stones", "sett", "cobblestone", "metal", "wood", "bricks",
-}
-_UNPAVED = {
-    "unpaved", "gravel", "fine_gravel", "compacted", "dirt", "earth",
-    "ground", "grass", "mud", "sand", "pebblestone", "rock",
-}
-
-_SPEED_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(mph)?\s*$", re.IGNORECASE)
+_COORD_SCALE = 10_000_000
+_KEY_MULTIPLIER = 4_294_967_296
 
 
 # ==================================================
-# QUERY
+# ROAD NETWORK
 # ==================================================
-
-def build_road_query(route_geometries, server_timeout_s=18):
-    """All roads and paths within QUERY_RADIUS_M of any route, with their nodes."""
-
-    statements = "".join(
-        'way["highway"]'
-        '["highway"!~"^(proposed|construction|abandoned|razed|platform|'
-        'raceway|bus_guideway|elevator|corridor)$"]'
-        f"(around:{QUERY_RADIUS_M},{_polyline_param(coordinates)});"
-        for coordinates in route_geometries
-    )
-
-    return f"[out:json][timeout:{server_timeout_s}];({statements});out body qt;>;out skel qt;"
-
-
-def build_bbox_road_query(south, west, north, east, server_timeout_s=90):
-    """Every road and path inside a bounding box (used to build training data)."""
-
-    return (
-        f"[out:json][timeout:{server_timeout_s}];"
-        '(way["highway"]'
-        '["highway"!~"^(proposed|construction|abandoned|razed|platform|'
-        'raceway|bus_guideway|elevator|corridor)$"]'
-        f"({south},{west},{north},{east}););out body qt;>;out skel qt;"
-    )
-
-
-# ==================================================
-# PARSE OSM ELEMENTS
-# ==================================================
-
-def _parse_speed_kmh(value):
-
-    if not value:
-        return math.nan
-
-    match = _SPEED_RE.match(value)
-
-    if not match:
-        return math.nan
-
-    speed = float(match.group(1))
-
-    return speed * 1.609344 if match.group(2) else speed
-
-
-def _sidewalk_flag(tags):
-    """1 = has a sidewalk, 0 = mapped as having none, -1 = not mapped."""
-
-    values = {
-        tags.get(key, "").lower()
-        for key in ("sidewalk", "sidewalk:both", "sidewalk:left", "sidewalk:right")
-        if key in tags
-    }
-
-    if values & _SIDEWALK_YES:
-        return 1
-
-    if values & _SIDEWALK_NO:
-        return 0
-
-    return -1
-
-
-def _paved_flag(tags):
-
-    surface = tags.get("surface", "").lower()
-
-    if surface in _PAVED:
-        return 1
-
-    if surface in _UNPAVED:
-        return 0
-
-    return -1
-
 
 class RoadNetwork:
     """Road segments plus junction and dead-end points, as numpy arrays."""
 
-    def __init__(self, mid, length_m, road_class, sidewalk, speed, paved, junctions, dead_ends):
+    def __init__(
+        self, mid, length_m, road_class, sidewalk, speed, paved, lit,
+        junctions, dead_ends,
+    ):
         self.mid = mid
         self.length_m = length_m
         self.road_class = road_class
         self.sidewalk = sidewalk
         self.speed = speed
         self.paved = paved
+        self.lit = lit
         self.junctions = junctions
         self.dead_ends = dead_ends
 
@@ -205,103 +89,99 @@ class RoadNetwork:
         return len(self.length_m)
 
 
-def parse_road_network(elements):
+def _haversine_np(a, b):
+    """Vectorised great-circle distance in metres between [lon, lat] rows."""
+
+    lon1, lat1, lon2, lat2 = map(np.radians, (a[:, 0], a[:, 1], b[:, 0], b[:, 1]))
+
+    h = (
+        np.sin((lat2 - lat1) / 2) ** 2
+        + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
+    )
+
+    return 2 * EARTH_RADIUS_M * np.arcsin(np.sqrt(h))
+
+
+def build_network(ways):
     """
-    Turns Overpass elements (ways with node lists, then bare nodes)
-    into a RoadNetwork, or None if there are no usable roads.
+    ways: list of dicts with "coords" (n x 2 array of lon, lat) and the
+    attributes from road_tags.way_attributes(). Returns a RoadNetwork,
+    or None if there are no usable segments.
 
-    An "arm" is one road leaving a node: a way's end contributes one,
-    a node in the middle of a way contributes two. A node with three or
-    more arms is a junction; one with a single arm on a real street is
-    a dead end. (Counting arms rather than "shared nodes" avoids
-    calling a way that was merely split at a tag change a junction.)
+    Junctions and dead ends are found by counting "arms": a way's end
+    is one arm, a point in the middle of a way is two. A point with
+    three or more arms is a junction; one with a single arm on a real
+    street is a dead end. (Counting arms rather than "shared points"
+    avoids calling a way that was merely split at a tag change a
+    junction.) Points are identified by their exact coordinates.
     """
 
-    coordinates = {}
-    ways = []
+    ways = [w for w in ways if len(w["coords"]) >= 2]
 
-    for element in elements:
-
-        if element.get("type") == "node" and "lat" in element:
-            coordinates[element["id"]] = (element["lon"], element["lat"])
-
-        elif element.get("type") == "way" and element.get("nodes"):
-            ways.append(element)
-
-    mids = []
-    lengths = []
-    classes = []
-    sidewalks = []
-    speeds = []
-    paveds = []
-
-    arms = {}
-    street_end_nodes = set()
-
-    for way in ways:
-
-        tags = way.get("tags", {})
-        highway = tags.get("highway")
-
-        if highway is None:
-            continue
-
-        node_ids = way["nodes"]
-        closed = len(node_ids) > 2 and node_ids[0] == node_ids[-1]
-
-        for position, node_id in enumerate(node_ids):
-
-            at_end = position in (0, len(node_ids) - 1) and not closed
-
-            arms[node_id] = arms.get(node_id, 0) + (1 if at_end else 2)
-
-            if at_end and highway in _DEAD_END_HIGHWAYS:
-                street_end_nodes.add(node_id)
-
-        road_class = _CLASS_OF.get(highway, 3)
-        sidewalk = _sidewalk_flag(tags) if road_class in _SIDEWALK_CLASSES else -1
-        speed = _parse_speed_kmh(tags.get("maxspeed"))
-        paved = _paved_flag(tags)
-
-        for a_id, b_id in zip(node_ids, node_ids[1:]):
-
-            a = coordinates.get(a_id)
-            b = coordinates.get(b_id)
-
-            if a is None or b is None:
-                continue
-
-            length = haversine_m(a[1], a[0], b[1], b[0])
-
-            if length <= 0:
-                continue
-
-            mids.append(((a[0] + b[0]) / 2, (a[1] + b[1]) / 2))
-            lengths.append(length)
-            classes.append(road_class)
-            sidewalks.append(sidewalk)
-            speeds.append(speed)
-            paveds.append(paved)
-
-    if not lengths:
+    if not ways:
         return None
 
-    junctions = [coordinates[n] for n, count in arms.items() if count >= 3 and n in coordinates]
-    dead_ends = [
-        coordinates[n]
-        for n in street_end_nodes
-        if arms[n] == 1 and n in coordinates
-    ]
+    counts = np.array([len(w["coords"]) for w in ways])
+    coords = np.concatenate([np.asarray(w["coords"], dtype=float) for w in ways])
+    starts = np.cumsum(counts) - counts
+    ends = starts + counts - 1
+
+    # ---------- segments ----------
+
+    is_last = np.zeros(len(coords), dtype=bool)
+    is_last[ends] = True
+    first_of_pair = np.flatnonzero(~is_last)
+
+    a = coords[first_of_pair]
+    b = coords[first_of_pair + 1]
+    length = _haversine_np(a, b)
+
+    def per_segment(name, dtype):
+        values = np.array([w[name] for w in ways], dtype=dtype)
+        return np.repeat(values, counts - 1)
+
+    keep = length > 0
+
+    # ---------- arms (junctions and dead ends) ----------
+
+    ints = np.rint(coords * _COORD_SCALE).astype(np.int64)
+    keys = ints[:, 0] * _KEY_MULTIPLIER + ints[:, 1]
+
+    closed = (keys[starts] == keys[ends]) & (counts > 2)
+    arm_inc = np.full(len(coords), 2.0)
+    open_ways = ~closed
+    arm_inc[starts[open_ways]] = 1.0
+    arm_inc[ends[open_ways]] = 1.0
+
+    street_end = np.zeros(len(coords), dtype=bool)
+    eligible = np.array(
+        [w["highway"] in DEAD_END_HIGHWAYS for w in ways], dtype=bool
+    ) & open_ways
+    street_end[starts[eligible]] = True
+    street_end[ends[eligible]] = True
+
+    unique_keys, first_index, inverse = np.unique(
+        keys, return_index=True, return_inverse=True
+    )
+    arms = np.bincount(inverse, weights=arm_inc)
+    ends_street = np.bincount(inverse, weights=street_end.astype(float)) > 0
+
+    junction_points = coords[first_index[arms >= 3]]
+    dead_end_points = coords[first_index[(arms == 1) & ends_street]]
+
+    if not keep.any():
+        return None
 
     return RoadNetwork(
-        mid=np.array(mids, dtype=float),
-        length_m=np.array(lengths, dtype=float),
-        road_class=np.array(classes, dtype=np.int8),
-        sidewalk=np.array(sidewalks, dtype=np.int8),
-        speed=np.array(speeds, dtype=float),
-        paved=np.array(paveds, dtype=np.int8),
-        junctions=np.array(junctions, dtype=float).reshape(-1, 2),
-        dead_ends=np.array(dead_ends, dtype=float).reshape(-1, 2),
+        mid=((a + b) / 2)[keep],
+        length_m=length[keep],
+        road_class=per_segment("road_class", np.int8)[keep],
+        sidewalk=per_segment("sidewalk", np.int8)[keep],
+        speed=per_segment("speed", float)[keep],
+        paved=per_segment("paved", np.int8)[keep],
+        lit=per_segment("lit", np.int8)[keep],
+        junctions=junction_points.reshape(-1, 2),
+        dead_ends=dead_end_points.reshape(-1, 2),
     )
 
 
@@ -345,7 +225,28 @@ def _share(weights, condition):
     return round(float(weights[condition].sum() / total), 3) if total else None
 
 
-def _unavailable():
+def _tagged_share(length, flag, tagged_mask, min_tagged=MIN_TAGGED_SEGMENTS):
+    """Length-weighted share of segments flagged 1 among those tagged, or None."""
+
+    if tagged_mask.sum() < min_tagged:
+        return None
+
+    return _share(length[tagged_mask], flag[tagged_mask] == 1)
+
+
+def _coverage(length, tagged_mask, applicable_mask=None):
+    """
+    Share of the route's length (among segments where the tag applies)
+    that actually carries the tag. Tag-based ratios are only trusted
+    when this is high: 5 lit streets out of 200 tells us nothing.
+    """
+
+    applicable = np.ones(len(length), dtype=bool) if applicable_mask is None else applicable_mask
+
+    return _share(length[applicable], tagged_mask[applicable])
+
+
+def unavailable():
 
     return {"available": False}
 
@@ -357,7 +258,7 @@ def road_network_features(route_coordinates, network):
     """
 
     if network is None:
-        return _unavailable()
+        return unavailable()
 
     samples = resample_line(
         route_coordinates,
@@ -366,7 +267,7 @@ def road_network_features(route_coordinates, network):
     )
 
     if len(samples) < 2:
-        return _unavailable()
+        return unavailable()
 
     route_km = line_length_m(route_coordinates) / 1000
     spacing = route_km * 1000 / (len(samples) - 1)
@@ -375,13 +276,14 @@ def road_network_features(route_coordinates, network):
     matched = _near(network.mid, samples, radius)
 
     if matched.sum() < MIN_MATCHED_SEGMENTS or route_km <= 0:
-        return _unavailable()
+        return unavailable()
 
     length = network.length_m[matched]
     road_class = network.road_class[matched]
     sidewalk = network.sidewalk[matched]
     speed = network.speed[matched]
     paved = network.paved[matched]
+    lit = network.lit[matched]
 
     features = {
         "available": True,
@@ -394,17 +296,23 @@ def road_network_features(route_coordinates, network):
     # ---- sidewalks (only streets where one could exist) ----
 
     sidewalk_known = sidewalk >= 0
+    sidewalk_applicable = np.isin(road_class, SIDEWALK_CLASSES)
     features["sidewalk_tagged_segments"] = int(sidewalk_known.sum())
-    features["sidewalk_share"] = (
-        _share(length[sidewalk_known], sidewalk[sidewalk_known] == 1)
-        if sidewalk_known.sum() >= MIN_TAGGED_SEGMENTS
-        else None
-    )
+    features["sidewalk_coverage"] = _coverage(length, sidewalk_known, sidewalk_applicable)
+    features["sidewalk_share"] = _tagged_share(length, sidewalk, sidewalk_known)
+
+    # ---- street lighting ----
+
+    lit_known = lit >= 0
+    features["lit_tagged_segments"] = int(lit_known.sum())
+    features["lit_coverage"] = _coverage(length, lit_known)
+    features["lit_share"] = _tagged_share(length, lit, lit_known)
 
     # ---- speed limits ----
 
     speed_known = ~np.isnan(speed)
     features["maxspeed_tagged_segments"] = int(speed_known.sum())
+    features["maxspeed_coverage"] = _coverage(length, speed_known)
     features["maxspeed_mean_kmh"] = (
         round(float(np.average(speed[speed_known], weights=length[speed_known])), 1)
         if speed_known.sum() >= MIN_TAGGED_SEGMENTS
@@ -415,11 +323,8 @@ def road_network_features(route_coordinates, network):
 
     paved_known = paved >= 0
     features["surface_tagged_segments"] = int(paved_known.sum())
-    features["paved_share"] = (
-        _share(length[paved_known], paved[paved_known] == 1)
-        if paved_known.sum() >= MIN_TAGGED_SEGMENTS
-        else None
-    )
+    features["surface_coverage"] = _coverage(length, paved_known)
+    features["paved_share"] = _tagged_share(length, paved, paved_known)
 
     # ---- junctions and dead ends ----
 
@@ -478,36 +383,3 @@ def route_shape_features(route_coordinates):
         "sharp_turns": turns,
         "turns_per_km": round(turns / route_km, 2),
     }
-
-
-# ==================================================
-# FETCH
-# ==================================================
-
-async def get_road_network(route_geometries):
-    """
-    RoadNetwork for all routes, or None if Overpass could not answer
-    in time. Never raises: this data only enriches the response.
-    """
-
-    try:
-        elements = await asyncio.wait_for(
-            _cached_fetch(build_road_query(route_geometries)),
-            timeout=ROAD_FETCH_TIMEOUT_S,
-        )
-    except Exception as error:
-        logger.warning("Road-network fetch failed: %s", error)
-        return None
-
-    if not elements:
-        return None
-
-    network = parse_road_network(elements)
-
-    if network is not None:
-        logger.info(
-            "Road network: %d segments, %d junctions, %d dead ends",
-            len(network), len(network.junctions), len(network.dead_ends),
-        )
-
-    return network

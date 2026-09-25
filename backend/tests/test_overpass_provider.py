@@ -7,7 +7,7 @@ Run from backend/:  venv/Scripts/python -m pytest -q
 import asyncio
 import time
 
-import emergency_service as es
+import overpass_provider as es
 
 
 ROUTE = [[[76.26, 9.93], [76.27, 9.94], [76.28, 9.95]]]
@@ -50,7 +50,7 @@ def fake_servers(monkeypatch, behaviour, hedge=0.05, deadline=1.0):
 
 
 def run(mode="walking"):
-    return asyncio.run(es.get_route_context(ROUTE, mode))
+    return asyncio.run(es.get_live_context(ROUTE, mode, include_roads=False))
 
 
 def test_primary_success(monkeypatch):
@@ -182,7 +182,7 @@ def test_emergency_and_street_data_fail_independently(monkeypatch):
     context = run()
 
     assert context["emergency_available"] is True
-    assert context["street_available"] is False
+    assert context["activity_available"] is False
     assert len(context["emergency"]) == 1
     assert context["activity"] == []
 
@@ -213,8 +213,54 @@ def test_busy_primary_is_retried_once(monkeypatch):
     assert attempts["primary"] == 3
 
 
-def test_driving_street_query_skips_activity():
-    query = es.build_street_query(ROUTE, include_activity=False)
+def test_activity_query_targets_places_near_the_route():
+    query = es.build_activity_query(ROUTE)
 
-    assert '"lit"' in query
-    assert '"shop"' not in query
+    assert '"shop"' in query
+    assert "bus_stop" in query
+    # Lighting now comes from the road query, not a separate lit query.
+    assert '"lit"' not in query
+
+
+def test_driving_does_not_fetch_activity(monkeypatch):
+    queries = []
+
+    async def fake_fetch(query):
+        queries.append(query)
+        return {"elements": [HOSPITAL]}
+
+    monkeypatch.setattr(es, "_fetch_with_fallbacks", fake_fetch)
+    monkeypatch.setattr(es, "_context_cache", es.TTLCache(ttl_seconds=60))
+
+    context = run("driving")
+
+    assert all('"shop"' not in q for q in queries)
+    # Not needed for drivers, so it is not reported as missing data.
+    assert context["activity_available"] is True
+
+
+def test_road_query_asks_for_roads_and_their_nodes():
+    query = es.build_road_query(ROUTE + ROUTE)
+
+    assert query.count('way["highway"]') == 2
+    assert "construction" in query          # unusable highways are excluded
+    assert "out body qt;>;out skel qt;" in query
+
+
+def test_elements_to_ways_uses_node_coordinates():
+    elements = [
+        {"type": "way", "id": 1, "nodes": [10, 11, 12],
+         "tags": {"highway": "residential", "sidewalk": "both", "lit": "yes"}},
+        {"type": "way", "id": 2, "nodes": [10, 99], "tags": {"highway": "construction"}},
+        {"type": "way", "id": 3, "nodes": [10, 11], "tags": {"building": "yes"}},
+        {"type": "node", "id": 10, "lon": 76.0, "lat": 10.0},
+        {"type": "node", "id": 11, "lon": 76.001, "lat": 10.0},
+        {"type": "node", "id": 12, "lon": 76.002, "lat": 10.0},
+    ]
+
+    ways = es.elements_to_ways(elements)
+
+    assert len(ways) == 1
+    assert ways[0]["coords"].shape == (3, 2)
+    assert ways[0]["sidewalk"] == 1
+    assert ways[0]["lit"] == 1

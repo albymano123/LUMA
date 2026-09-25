@@ -1,19 +1,22 @@
 """
-OpenStreetMap context along the candidate routes, via Overpass.
+Live OpenStreetMap data from the public Overpass servers.
 
-Two Overpass requests (run in parallel) fetch, for every route at once:
+This is the FALLBACK data source, used for trips outside the area
+covered by the local geo-database (see geo_context.py). The public
+servers are frequently overloaded, so every answer is treated as
+possibly missing: when no server gives a trustworthy answer in time
+we mark that part of the data unavailable rather than returning empty
+lists, so the scorer leaves those factors out and lowers its
+confidence instead of treating the route as having no hospitals,
+police or activity.
+
+Queries (kept separate so one failing does not cost us the others):
 
   * emergency services (hospitals, clinics, police, fire stations)
-    within EMERGENCY_RADIUS_M[mode] of the route
   * "activity" places (shops, food, banks, transit stops, ...)
-    within ACTIVITY_RADIUS_M, a proxy for how busy the street is
-  * road segments that carry a `lit` tag, for street lighting
-
-The public Overpass servers are frequently overloaded. When no
-server gives a trustworthy answer in time we mark that part of
-the data unavailable rather than returning empty lists, so the scorer leaves
-those factors out and lowers its confidence instead of treating the
-route as having no hospitals, police or activity.
+  * the roads near the route, with their tags (road type, sidewalks,
+    lighting, speed limits) - run last and only if the first succeeded,
+    so it never competes with them for the servers' rate limits
 """
 
 import asyncio
@@ -22,9 +25,13 @@ import logging
 import math
 
 import httpx
+import numpy as np
 
 from cache import TTLCache
 from geo import resample_line
+from road_features import QUERY_RADIUS_M, build_network
+from road_tags import IGNORED_HIGHWAYS, way_attributes
+from settings import ACTIVITY_RADIUS_M, EMERGENCY_RADIUS_M
 
 
 logger = logging.getLogger("lumapath.overpass")
@@ -40,16 +47,6 @@ FALLBACK_SERVERS = [
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
 ]
-
-# How far from the route to look for emergency services. Matches
-# the distance at which route_analyzer scores access as zero.
-EMERGENCY_RADIUS_M = {
-    "walking": 2000,
-    "cycling": 3000,
-    "driving": 5000,
-}
-ACTIVITY_RADIUS_M = 100
-LIGHTING_RADIUS_M = 30
 
 # Spacing of the polyline we send to Overpass. `around` follows
 # the straight segments between these points, so a coarse line is
@@ -70,9 +67,6 @@ ACTIVITY_AMENITIES = (
     "townhall|community_centre|post_office|school|college|university"
 )
 
-LIT_YES = {"yes", "24/7", "automatic", "limited", "interval", "sunset-sunrise"}
-LIT_NO = {"no", "disused"}
-
 # Start asking the fallback servers if the primary has not answered
 # by then, and give up on Overpass entirely after DEADLINE_S. The
 # server-side [timeout] is a little shorter so Overpass reports a
@@ -82,6 +76,9 @@ DEADLINE_S = 20
 RETRY_DELAY_S = 1.5
 RETRY_MIN_REMAINING_S = 5
 SERVER_TIMEOUT_S = 18
+
+# Give up on the optional road query quickly so results are never held up.
+ROAD_FETCH_TIMEOUT_S = 10
 
 _context_cache = TTLCache(ttl_seconds=900)
 
@@ -141,26 +138,14 @@ def build_emergency_query(route_geometries, mode):
     ])
 
 
-def build_street_query(route_geometries, include_activity=True):
-    """
-    Lit-tagged roads close to each route and, unless disabled,
-    activity places. The activity part is by far the heaviest
-    (every shop along every route), so it is skipped for driving,
-    where it is not scored.
-    """
+def build_activity_query(route_geometries):
+    """Activity places (shops, food, transit...) close to each route."""
 
     statements = []
 
     for coordinates in route_geometries:
 
         line = _polyline_param(coordinates)
-
-        statements.append(
-            f'way["highway"]["lit"](around:{LIGHTING_RADIUS_M},{line});'
-        )
-
-        if not include_activity:
-            continue
 
         statements.append(
             f'nwr["amenity"~"^({ACTIVITY_AMENITIES})$"]'
@@ -197,7 +182,6 @@ def classify_elements(elements):
 
     emergency = []
     activity = []
-    lit_segments = []
 
     seen = set()
 
@@ -229,23 +213,12 @@ def classify_elements(elements):
                 "lat": position[1],
             })
 
-        elif element["type"] == "way" and "highway" in tags and "lit" in tags:
-            lit_value = tags["lit"].lower()
-
-            if lit_value in LIT_YES or lit_value in LIT_NO:
-                lit_segments.append({
-                    "lit": lit_value in LIT_YES,
-                    "lon": position[0],
-                    "lat": position[1],
-                })
-
         else:
             activity.append(position)
 
     return {
         "emergency": emergency,
         "activity": activity,
-        "lit_segments": lit_segments,
     }
 
 
@@ -412,55 +385,133 @@ async def _cached_fetch(query):
     return elements
 
 
-async def get_route_context(route_geometries, mode="walking"):
+# ==================================================
+# ROADS (tags + geometry, for road-environment features)
+# ==================================================
+
+def build_road_query(route_geometries, server_timeout_s=SERVER_TIMEOUT_S):
+    """All roads and paths within QUERY_RADIUS_M of any route, with their nodes."""
+
+    ignored = "|".join(sorted(IGNORED_HIGHWAYS))
+
+    statements = "".join(
+        f'way["highway"]["highway"!~"^({ignored})$"]'
+        f"(around:{QUERY_RADIUS_M},{_polyline_param(coordinates)});"
+        for coordinates in route_geometries
+    )
+
+    return f"[out:json][timeout:{server_timeout_s}];({statements});out body qt;>;out skel qt;"
+
+
+def elements_to_ways(elements):
+    """Overpass ways (with their nodes) -> dicts for road_features.build_network()."""
+
+    coordinates = {
+        element["id"]: (element["lon"], element["lat"])
+        for element in elements
+        if element.get("type") == "node" and "lat" in element
+    }
+
+    ways = []
+
+    for element in elements:
+
+        if element.get("type") != "way":
+            continue
+
+        attributes = way_attributes(element.get("tags", {}))
+
+        if attributes is None:
+            continue
+
+        points = [coordinates[n] for n in element.get("nodes", []) if n in coordinates]
+
+        if len(points) >= 2:
+            ways.append({**attributes, "coords": np.array(points, dtype=float)})
+
+    return ways
+
+
+# ==================================================
+# PUBLIC API
+# ==================================================
+
+async def _no_elements():
+    return []
+
+
+async def get_live_context(route_geometries, mode="walking", include_roads=True):
     """
-    Runs two Overpass queries in parallel: a light one for emergency
-    services and a heavier one for street activity and lighting.
-    They succeed or fail independently, so a busy server costing us
-    the heavy query does not also cost us emergency-service data.
+    Live data for the routes. Emergency and activity queries run in
+    parallel and succeed or fail independently; the road query runs
+    afterwards, and only if emergency data arrived (see module docstring).
 
     Returns:
       {
         "emergency_available": bool,
-        "street_available": bool,
+        "activity_available": bool,
+        "network_available": bool,
         "emergency": [...],
         "activity": [(lon, lat), ...],
-        "lit_segments": [...],
+        "network": RoadNetwork or None,
       }
     """
 
-    emergency_elements, street_elements = await asyncio.gather(
+    # Street activity is not scored for drivers, and it is the most
+    # expensive data to fetch, so it is skipped for them.
+    fetch_activity = mode != "driving"
+
+    emergency_elements, activity_elements = await asyncio.gather(
         _cached_fetch(build_emergency_query(route_geometries, mode)),
-        _cached_fetch(
-            build_street_query(
-                route_geometries,
-                include_activity=mode != "driving",
-            )
-        ),
+        _cached_fetch(build_activity_query(route_geometries)) if fetch_activity else _no_elements(),
     )
 
     emergency = classify_elements(emergency_elements or [])
-    street = classify_elements(street_elements or [])
+    activity = classify_elements(activity_elements or [])
+
+    network = None
+
+    if include_roads and emergency_elements is not None:
+        network = await _get_road_network(route_geometries)
 
     context = {
         "emergency_available": emergency_elements is not None,
-        "street_available": street_elements is not None,
+        "activity_available": activity_elements is not None,
+        "network_available": network is not None,
         "emergency": emergency["emergency"],
-        "activity": street["activity"],
-        "lit_segments": street["lit_segments"],
+        "activity": activity["activity"],
+        "network": network,
     }
 
     if not context["emergency_available"]:
         logger.error("No reliable emergency-service data; factor marked unavailable")
 
-    if not context["street_available"]:
-        logger.error("No reliable street activity/lighting data; factors marked unavailable")
+    if not context["activity_available"]:
+        logger.error("No reliable street-activity data; factor marked unavailable")
 
     logger.info(
-        "Overpass: %d emergency services, %d activity places, %d lit-tagged roads",
+        "Overpass: %d emergency services, %d activity places, road network %s",
         len(context["emergency"]),
         len(context["activity"]),
-        len(context["lit_segments"]),
+        "loaded" if network is not None else "unavailable",
     )
 
     return context
+
+
+async def _get_road_network(route_geometries):
+    """RoadNetwork from Overpass, or None. Never raises: it only enriches the result."""
+
+    try:
+        elements = await asyncio.wait_for(
+            _cached_fetch(build_road_query(route_geometries)),
+            timeout=ROAD_FETCH_TIMEOUT_S,
+        )
+    except Exception as error:
+        logger.warning("Road-network fetch failed: %s", error)
+        return None
+
+    if not elements:
+        return None
+
+    return build_network(elements_to_ways(elements))

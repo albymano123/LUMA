@@ -16,6 +16,7 @@ import StarRoundedIcon from "@mui/icons-material/StarRounded";
 import { riskStyle, routeColors } from "../theme";
 import {
   CATEGORY_LABELS,
+  RECOMMENDATION_LABELS,
   formatDistance,
   formatDuration,
   formatRiskLevel,
@@ -27,7 +28,7 @@ const PREFERENCES = [
   { value: "fastest", label: "Time-efficient", icon: <BoltIcon fontSize="small" /> },
 ];
 
-function RouteCard({ route, selected, recommended, onSelect }) {
+function RouteCard({ route, selected, recommendationLabel, onSelect }) {
   const risk = riskStyle(route.risk_level);
 
   return (
@@ -74,18 +75,18 @@ function RouteCard({ route, selected, recommended, onSelect }) {
             <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
               <Typography sx={{ fontWeight: 700 }}>{route.name}</Typography>
 
-              {recommended && (
+              {recommendationLabel && (
                 <Chip
                   size="small"
                   icon={<StarRoundedIcon />}
-                  label="Recommended"
+                  label={recommendationLabel}
                   color="success"
                   sx={{ height: 22 }}
                 />
               )}
 
               {route.categories
-                .filter((category) => !(recommended && category === "safest"))
+                .filter((category) => !(recommendationLabel && category === "safest"))
                 .map((category) => (
                   <Chip
                     key={category}
@@ -123,49 +124,50 @@ function RouteCard({ route, selected, recommended, onSelect }) {
 
 // Preference switch (Safest / Balanced / Time-efficient) plus a card
 // for every route. Picking a preference selects the route the backend
-// tagged with that category.
+// tagged with that category. "Selected" (what the map and details show)
+// and "Recommended" (the backend's safest pick, when it can defend one)
+// are separate ideas and are shown separately.
 function RouteComparison({
   safeRouteData,
   selectedRoute,
-  setSelectedRoute,
+  preference,
+  onSelectRoute,
+  onSelectPreference,
 }) {
   if (!safeRouteData?.routes?.length) {
     return null;
   }
 
-  const { routes, recommended_route_id: recommendedId } = safeRouteData;
-
-  const selected = routes.find((route) => route.id === selectedRoute);
+  const { routes, recommendation } = safeRouteData;
 
   const routeFor = (category) =>
     routes.find((route) => route.categories.includes(category));
 
-  const activePreference =
-    PREFERENCES.find((p) => selected?.categories.includes(p.value))?.value ?? null;
+  const recommendationLabel = (route) =>
+    route.id === recommendation?.route_id
+      ? RECOMMENDATION_LABELS[recommendation.state] ?? null
+      : null;
 
   return (
     <Box>
       <ToggleButtonGroup
-        value={activePreference}
+        value={preference}
         exclusive
         fullWidth
         size="small"
-        onChange={(_, value) => {
-          const route = value && routeFor(value);
-          if (route) setSelectedRoute(route.id);
-        }}
+        onChange={(_, value) => value && onSelectPreference(value)}
         aria-label="Route preference"
         sx={{ mb: 1.5 }}
       >
-        {PREFERENCES.map((preference) => (
+        {PREFERENCES.map((option) => (
           <ToggleButton
-            key={preference.value}
-            value={preference.value}
-            disabled={!routeFor(preference.value)}
+            key={option.value}
+            value={option.value}
+            disabled={!routeFor(option.value)}
             sx={{ gap: 0.75, textTransform: "none", fontWeight: 600 }}
           >
-            {preference.icon}
-            {preference.label}
+            {option.icon}
+            {option.label}
           </ToggleButton>
         ))}
       </ToggleButtonGroup>
@@ -176,8 +178,8 @@ function RouteComparison({
             key={route.id}
             route={route}
             selected={route.id === selectedRoute}
-            recommended={route.id === recommendedId}
-            onSelect={setSelectedRoute}
+            recommendationLabel={recommendationLabel(route)}
+            onSelect={onSelectRoute}
           />
         ))}
       </Stack>

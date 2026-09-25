@@ -18,9 +18,6 @@ import logging
 import math
 import os
 
-import joblib
-import pandas as pd
-
 from ml.features import FEATURE_COLUMNS, feature_row
 
 
@@ -65,6 +62,10 @@ def _load():
             logger.warning("ML model was trained on different features; ignoring it")
             return None
 
+        # Imported here so the API does not load scikit-learn/pandas
+        # unless a trained model actually exists.
+        import joblib
+
         _loaded = (joblib.load(MODEL_PATH), metadata)
 
     except Exception as error:
@@ -85,7 +86,7 @@ def _status(status, message, **extra):
     }
 
 
-def estimate_for_route(shape, road, emergency, mode):
+def estimate_for_route(shape, road, surroundings, emergency, mode):
     """
     Returns a dict that always has "status":
 
@@ -126,9 +127,11 @@ def estimate_for_route(shape, road, emergency, mode):
             "Not enough road data was available for this route.",
         )
 
-    row = feature_row(shape, road, emergency)
+    row = feature_row(shape, road, surroundings, emergency)
 
     try:
+        import pandas as pd
+
         rate = float(model.predict(pd.DataFrame([row])[FEATURE_COLUMNS])[0])
     except Exception as error:
         logger.warning("ML prediction failed: %s", error)

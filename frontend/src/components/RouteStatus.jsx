@@ -20,7 +20,7 @@ import WbCloudyOutlinedIcon from "@mui/icons-material/WbCloudyOutlined";
 const LOADING_STEPS = [
   "Finding alternative routes…",
   "Checking hospitals and police stations nearby…",
-  "Looking at street activity and lighting…",
+  "Looking at streets, buildings and lighting…",
   "Checking current weather…",
   "Scoring and comparing routes…",
 ];
@@ -46,7 +46,8 @@ function LoadingState() {
       <LinearProgress sx={{ borderRadius: 2, mb: 1 }} />
 
       <Typography variant="caption" color="text.secondary">
-        This uses free public map services and can take up to half a minute.
+        This usually takes a few seconds. Trips outside Kerala use live public
+        map servers and can take up to half a minute.
       </Typography>
 
       <Stack spacing={1.5} sx={{ mt: 2.5 }}>
@@ -60,7 +61,7 @@ function LoadingState() {
 
 const FACTORS = [
   { icon: <LocalHospitalOutlinedIcon fontSize="small" />, text: "Hospitals & police nearby" },
-  { icon: <StorefrontOutlinedIcon fontSize="small" />, text: "Busy, active streets" },
+  { icon: <StorefrontOutlinedIcon fontSize="small" />, text: "Busy, built-up streets" },
   { icon: <NightlightOutlinedIcon fontSize="small" />, text: "Street lighting" },
   { icon: <WbCloudyOutlinedIcon fontSize="small" />, text: "Current weather" },
 ];

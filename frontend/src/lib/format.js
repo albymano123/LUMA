@@ -39,13 +39,10 @@ export function formatMetres(metres) {
   return `${(metres / 1000).toFixed(1)} km`;
 }
 
-// The backend says "Lower risk"; the UI title-cases it.
+// Risk levels arrive worded by the backend ("Lower risk", "Insufficient
+// data"); shown as-is so every screen uses the same words.
 export function formatRiskLevel(level) {
-  if (!level) {
-    return "Insufficient data";
-  }
-
-  return level.replace(/\b(risk|data)\b/, (word) => word[0].toUpperCase() + word.slice(1));
+  return level || "Insufficient data";
 }
 
 export const CATEGORY_LABELS = {
@@ -64,4 +61,21 @@ export const CONFIDENCE_HELP = {
   high: "All the main safety data sources were available for this route.",
   medium: "Some safety data was unavailable, so the score is based on fewer factors.",
   low: "Much of the safety data was unavailable. Treat this score with caution.",
+};
+
+// What the backend's recommendation state means for the "Recommended" tag.
+// "unavailable" has no entry on purpose: nothing is labelled recommended.
+export const RECOMMENDATION_LABELS = {
+  recommended: "Recommended",
+  tie: "Recommended",
+  close: "Recommended",
+  single: "Only route found",
+};
+
+export const DATA_SOURCE_LABELS = {
+  emergency_services: "emergency services",
+  street_activity: "street activity",
+  road_network: "road details and lighting",
+  buildings: "building data",
+  weather: "weather",
 };

@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 
-import "leaflet/dist/leaflet.css";
 import "./index.css";
 import App from "./App.jsx";
 import theme from "./theme";

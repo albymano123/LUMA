@@ -24,6 +24,9 @@ FEATURE_COLUMNS = [
     "sidewalk_share",
     "maxspeed_mean_kmh",
     "paved_share",
+    "lit_share",
+    "built_up_share",
+    "longest_unbuilt_km",
     "junctions_per_km",
     "dead_ends_per_km",
     "hospital_median_m",
@@ -31,10 +34,11 @@ FEATURE_COLUMNS = [
 ]
 
 
-def feature_row(shape, road, emergency):
+def feature_row(shape, road, surroundings, emergency):
     """
     shape:     route_shape_features() output
     road:      road_network_features() output
+    surroundings: {"built_up_share": .., "longest_unbuilt_km": ..}
     emergency: {"hospital_median_m": .., "police_median_m": ..}
 
     Missing values become NaN (not zero): the model, and the
@@ -56,6 +60,9 @@ def feature_row(shape, road, emergency):
         "sidewalk_share": pick(road, "sidewalk_share"),
         "maxspeed_mean_kmh": pick(road, "maxspeed_mean_kmh"),
         "paved_share": pick(road, "paved_share"),
+        "lit_share": pick(road, "lit_share"),
+        "built_up_share": pick(surroundings, "built_up_share"),
+        "longest_unbuilt_km": pick(surroundings, "longest_unbuilt_km"),
         "junctions_per_km": pick(road, "junctions_per_km"),
         "dead_ends_per_km": pick(road, "dead_ends_per_km"),
         "hospital_median_m": pick(emergency, "hospital_median_m"),
