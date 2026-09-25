@@ -1,0 +1,188 @@
+/*
+  LumaPath design tokens.
+
+  Every colour, size, radius, shadow and duration used by the interface
+  comes from here, so the look stays consistent and can be re-themed in
+  one place. Components never hard-code values.
+
+  Two surface contexts:
+    default  light surfaces (planner panel, content pages)
+    .on-dark midnight surfaces (navigation bar, hero, footer): the same
+             semantic tokens are redefined, so components work in both.
+*/
+
+:root {
+  /* ---------- palette ---------- */
+  --ink-950: #040a1a;
+  --ink-900: #081226;
+  --ink-850: #0b1730;
+  --ink-800: #0f1d3a;
+  --ink-700: #17284d;
+  --ink-600: #22386a;
+  --ink-500: #34508d;
+
+  --blue-700: #1a45c4;
+  --blue-600: #2358e6;
+  --blue-500: #2f6bff;
+  --blue-400: #5b8dff;
+  --blue-100: #e3ebff;
+  --blue-50: #f1f5ff;
+
+  --cyan-500: #06b6d4;
+  --cyan-400: #22d3ee;
+  --cyan-300: #67e8f9;
+
+  --green-700: #15803d;
+  --green-600: #16a34a;
+  --green-400: #34d399;
+  --green-100: #dcfce7;
+  --green-50: #f0fdf4;
+
+  --amber-700: #b45309;
+  --amber-500: #f59e0b;
+  --amber-400: #fbbf24;
+  --amber-100: #fef3c7;
+  --amber-50: #fffbeb;
+
+  --red-700: #b91c1c;
+  --red-600: #dc2626;
+  --red-400: #f87171;
+  --red-100: #fee2e2;
+  --red-50: #fef2f2;
+
+  --slate-700: #334155;
+  --slate-500: #64748b;
+  --slate-200: #e2e8f0;
+  --slate-100: #eef2f7;
+
+  /* ---------- semantic (light) ---------- */
+  --bg: #f3f6fb;
+  --surface: #ffffff;
+  --surface-2: #f7f9fd;
+  --surface-3: #eef2f9;
+  --line: #e1e7f1;
+  --line-strong: #cbd5e5;
+  --text: #0a1226;
+  --text-2: #33415c;
+  --muted: #56657f;
+  --faint: #64748b;
+  --accent: var(--blue-500);
+  --accent-strong: var(--blue-600);
+  --accent-soft: var(--blue-50);
+  --focus: #2f6bff;
+
+  --positive: var(--green-700);
+  --positive-bg: var(--green-100);
+  --warning: var(--amber-700);
+  --warning-bg: var(--amber-100);
+  --danger: var(--red-700);
+  --danger-bg: var(--red-100);
+  --neutral: var(--slate-700);
+  --neutral-bg: var(--slate-100);
+  --info: var(--blue-700);
+  --info-bg: var(--blue-100);
+
+  /* ---------- typography ---------- */
+  --font-display: "Manrope Variable", "Inter Variable", system-ui, sans-serif;
+  --font-body: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --fs-display: clamp(2.5rem, 1.6rem + 3.6vw, 4.5rem);
+  --fs-h1: clamp(2rem, 1.5rem + 2vw, 3rem);
+  --fs-h2: clamp(1.625rem, 1.3rem + 1.2vw, 2.25rem);
+  --fs-h3: 1.25rem;
+  --fs-h4: 1.0625rem;
+  --fs-body: 0.9375rem;
+  --fs-lead: clamp(1.0625rem, 1rem + 0.35vw, 1.25rem);
+  --fs-small: 0.8125rem;
+  --fs-caption: 0.75rem;
+
+  /* ---------- spacing (4 px base) ---------- */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.25rem;
+  --s-6: 1.5rem;
+  --s-8: 2rem;
+  --s-10: 2.5rem;
+  --s-12: 3rem;
+  --s-16: 4rem;
+  --s-24: 6rem;
+
+  /* ---------- shape ---------- */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-2xl: 28px;
+  --r-pill: 999px;
+
+  /* ---------- depth ---------- */
+  --shadow-xs: 0 1px 2px rgba(10, 18, 38, 0.06);
+  --shadow-sm: 0 2px 8px rgba(10, 18, 38, 0.07), 0 1px 2px rgba(10, 18, 38, 0.05);
+  --shadow-md: 0 8px 24px rgba(10, 18, 38, 0.1), 0 2px 6px rgba(10, 18, 38, 0.06);
+  --shadow-lg: 0 18px 48px rgba(10, 18, 38, 0.16), 0 4px 12px rgba(10, 18, 38, 0.08);
+  --glass-bg: rgba(255, 255, 255, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.6);
+  --glass-blur: saturate(160%) blur(18px);
+
+  /* ---------- motion ---------- */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 320ms;
+  --dur-4: 520ms;
+
+  /* ---------- layers ---------- */
+  --z-map-ui: 500;
+  --z-panel: 600;
+  --z-nav: 900;
+  --z-sheet: 800;
+  --z-toast: 1200;
+
+  --nav-h: 64px;
+}
+
+/* Midnight surfaces: same semantic names, dark values. */
+.on-dark {
+  --bg: var(--ink-950);
+  --surface: rgba(255, 255, 255, 0.06);
+  --surface-2: rgba(255, 255, 255, 0.04);
+  --surface-3: rgba(255, 255, 255, 0.09);
+  --line: rgba(255, 255, 255, 0.12);
+  --line-strong: rgba(255, 255, 255, 0.22);
+  --text: #f4f7ff;
+  --text-2: #d3dcf0;
+  --muted: #a6b3cf;
+  --faint: #7c8bab;
+  --accent: var(--cyan-400);
+  --accent-strong: var(--cyan-300);
+  --accent-soft: rgba(34, 211, 238, 0.12);
+  --focus: #67e8f9;
+
+  --positive: var(--green-400);
+  --positive-bg: rgba(52, 211, 153, 0.14);
+  --warning: var(--amber-400);
+  --warning-bg: rgba(251, 191, 36, 0.14);
+  --danger: var(--red-400);
+  --danger-bg: rgba(248, 113, 113, 0.14);
+  --neutral: #c3cee6;
+  --neutral-bg: rgba(255, 255, 255, 0.1);
+  --info: var(--cyan-300);
+  --info-bg: rgba(34, 211, 238, 0.14);
+
+  --glass-bg: rgba(12, 22, 46, 0.62);
+  --glass-border: rgba(255, 255, 255, 0.12);
+
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-1: 1ms;
+    --dur-2: 1ms;
+    --dur-3: 1ms;
+    --dur-4: 1ms;
+  }
+}

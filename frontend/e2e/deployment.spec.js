@@ -60,6 +60,28 @@ test("files cannot be read from outside the app folder", async ({ request }) => 
   expect(body).not.toContain("FastAPI");
 });
 
+test("the CSP allows the vector basemap (no violations, no console errors)", async ({ page }) => {
+  // No mocks and no forced raster map: the real vector style loads from
+  // OpenFreeMap. Needs the internet; only CSP problems are asserted on.
+  const violations = [];
+
+  page.on("console", (message) => {
+    if (/Content Security Policy|Refused to/i.test(message.text())) violations.push(message.text());
+  });
+  page.on("pageerror", (error) => {
+    if (/Content Security Policy|Refused to/i.test(error.message)) violations.push(error.message);
+  });
+
+  await page.goto("/map");
+  await page.waitForTimeout(8000);
+
+  expect(violations).toEqual([]);
+  // The worker files are served by the app itself.
+  const worker = await page.request.get("/maplibre/maplibre-gl-worker.mjs");
+  expect(worker.status()).toBe(200);
+  expect(worker.headers()["content-type"]).toMatch(/javascript/);
+});
+
 test("the app runs under the content security policy without errors", async ({ page }) => {
   const problems = collectProblems(page);
   await mockApi(page);

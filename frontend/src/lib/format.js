@@ -79,3 +79,25 @@ export const DATA_SOURCE_LABELS = {
   buildings: "building data",
   weather: "weather",
 };
+
+// Opening hours are shown exactly as mapped in OpenStreetMap. "24/7" reads
+// better as words; anything else is left untouched (never reinterpreted).
+export function formatHours(hours) {
+  if (!hours) return null;
+  return hours.trim() === "24/7" ? "Open 24 hours" : hours.trim();
+}
+
+export const SHORT_FACTOR_LABELS = {
+  emergency: "Emergency",
+  activity: "Activity",
+  surroundings: "Built-up",
+  lighting: "Lighting",
+  road_safety: "Road",
+  weather: "Weather",
+};
+
+export const PREFERENCE_HELP = {
+  safest: "Highest safety score. Scores within 2 points count as equal, and the quicker route wins.",
+  balanced: "Balances safety (50%), time (30%) and distance (20%).",
+  fastest: "The quickest route. Its safety information is still shown.",
+};

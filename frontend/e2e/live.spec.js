@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { card, collectProblems } from "./helpers.js";
+import { collectProblems } from "./helpers.js";
 
 // Real backend, real map data and real public services. Slower and
 // dependent on the internet, so it only runs on request:
@@ -21,7 +21,24 @@ for (const trip of TRIPS) {
     const problems = collectProblems(page);
     await page.goto("/map");
 
-    await page.getByRole("button", { name: trip.mode }).click();
+    await page.getByRole("button", { name: trip.mode, exact: true }).click();
+
+    // Record which analysis steps tick, and when, to prove they are real.
+    await page.evaluate(() => {
+      window.__steps = [];
+      const seen = new Set();
+      new MutationObserver(() => {
+        document.querySelectorAll(".ap__step").forEach((step) => {
+          const key = step.querySelector(".ap__title")?.textContent;
+          const state = step.dataset.state;
+
+          if ((state === "done" || state === "warn") && !seen.has(key)) {
+            seen.add(key);
+            window.__steps.push({ key, at: performance.now() });
+          }
+        });
+      }).observe(document.body, { subtree: true, attributes: true, childList: true, attributeFilter: ["data-state"] });
+    });
 
     for (const [label, text] of [["Start", trip.from], ["Destination", trip.to]]) {
       await page.getByLabel(label, { exact: true }).fill(text);
@@ -30,22 +47,32 @@ for (const trip of TRIPS) {
       await option.click();
     }
 
-    await expect(page.getByText(/\d+ routes? compared/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByText(/\d+ routes? compared/).first()).toBeVisible({ timeout: 90_000 });
+
+    // The steps ticked in the order the backend really finished them.
+    const steps = await page.evaluate(() => window.__steps);
+    const order = steps.map((step) => step.key);
+
+    expect(order.indexOf("Finding routes")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("Finding routes")).toBeLessThan(order.indexOf("Checking the weather"));
+    expect(order.indexOf("Checking the weather")).toBeLessThan(order.indexOf("Loading roads, buildings and emergency services"));
 
     // Real routes drawn, emergency services from the local map database.
     expect(await page.locator(".leaflet-overlay-pane path").count()).toBeGreaterThan(1);
     await expect(page.locator(".lp-pin--hospital, .lp-pin--clinic").first()).toBeVisible();
 
+    // The vector basemap actually loaded (no fallback to plain raster tiles).
+    await expect(page.locator("canvas.maplibregl-canvas")).toHaveCount(1);
+
     // A score, a risk level and the data source credit are shown.
     await expect(page.getByText(/Lower risk|Moderate risk|Higher risk/).first()).toBeVisible();
     await expect(page.getByText(/OpenStreetMap extract/)).toBeVisible();
-    await expect(page.getByText("Experimental ML estimate")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Experimental ML estimate" })).toBeVisible();
 
     // Exactly one route is selected at a time.
     const selected = await page.locator('button[aria-pressed="true"]').filter({ hasText: /Route [A-E]/ }).count();
     expect(selected).toBe(1);
 
-    expect(card(page, "Route A")).toBeTruthy();
     expect(problems.filter((p) => !/Failed to load resource/.test(p))).toEqual([]);
   });
 }

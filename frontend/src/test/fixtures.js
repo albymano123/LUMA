@@ -46,12 +46,13 @@ export function makeRoute(overrides = {}) {
       wind_speed: 8, visibility: 20000, weather_code: 1, is_day: true,
     },
     emergency_services: [
-      { id: "node-1", kind: "hospital", name: "Test Hospital", phone: null, emergency_ward: true, lat: 10.31, lon: 76.33, distance_m: 300, along_route_km: 1.2 },
-      { id: "node-2", kind: "police", name: "Test Police Station", phone: null, emergency_ward: false, lat: 10.32, lon: 76.32, distance_m: 500, along_route_km: 2.4 },
+      { id: "node-1", kind: "hospital", name: "Test Hospital", phone: "+91 480 2700001", emergency_ward: true, opening_hours: "24/7", lat: 10.31, lon: 76.33, distance_m: 300, along_route_km: 1.2 },
+      { id: "node-2", kind: "police", name: "Test Police Station", phone: null, emergency_ward: false, opening_hours: null, lat: 10.32, lon: 76.32, distance_m: 500, along_route_km: 2.4 },
     ],
     hospital_count: 1,
     police_station_count: 1,
     fire_station_count: 0,
+    highlights: [],
     route_features: {
       route_shape: { route_km: 4.2, directness: 0.8, sharp_turns: 6, turns_per_km: 1.4 },
       road_network: {

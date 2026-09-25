@@ -17,20 +17,44 @@ const json = (body, status = 200) => ({
   body: JSON.stringify(body),
 });
 
+// What the backend streams: stages as they finish, then the result.
+function ndjson(result) {
+  const events = [
+    { event: "routes", count: result.routes.length },
+    { event: "weather", available: result.data_sources.weather !== false },
+    {
+      event: "map_data",
+      source: result.geo_source?.type === "live" ? "overpass" : "local",
+      emergency_services: result.data_sources.emergency_services !== false,
+      road_network: result.data_sources.road_network !== false,
+    },
+    { event: "result", data: result },
+  ];
+
+  return events.map((event) => JSON.stringify(event)).join("\n") + "\n";
+}
+
 /**
  * Replaces every network call the app makes.
- *   routes(request) -> {status, body}   answer for POST /safe-route
+ *   routes(request, callNumber) -> {status?, body} | {abort: true}
  * Returns a recorder so tests can assert what the app asked for.
+ *
+ * The lightweight raster basemap is forced (a documented visitor setting),
+ * so tests never depend on the vector-tile servers.
  */
 export async function mockApi(page, { routes = () => ({ body: makeResponse() }) } = {}) {
   const seen = { safeRoute: [], searches: [] };
 
+  await page.addInitScript(() => {
+    try {
+      window.localStorage.setItem("lumapath.map", "raster");
+    } catch {
+      // Storage unavailable: the default map is used.
+    }
+  });
+
   await page.route(/tile\.openstreetmap\.org/, (route) =>
     route.fulfill({ status: 200, contentType: "image/png", body: TILE })
-  );
-
-  await page.route(/fonts\.(googleapis|gstatic)\.com/, (route) =>
-    route.fulfill({ status: 200, contentType: "text/css", body: "" })
   );
 
   await page.route("**/geocode/search**", (route) => {
@@ -48,7 +72,17 @@ export async function mockApi(page, { routes = () => ({ body: makeResponse() }) 
     route.fulfill(json({ id: "point", name: "Near Chalakudy", description: "Kerala, India", lat: 10.3, lon: 76.33 }))
   );
 
-  await page.route("**/safe-route", async (route) => {
+  await page.route("**/health", (route) =>
+    route.fulfill(json({
+      status: "healthy",
+      geo_database: {
+        available: true, source: "Test extract", extract_date: "2026-09-23",
+        ways: 495875, places: { hospital: 5270, clinic: 2170, police: 852, fire_station: 181, activity: 142881 },
+      },
+    }))
+  );
+
+  const handle = (streaming) => async (route) => {
     seen.safeRoute.push(JSON.parse(route.request().postData()));
 
     const answer = await routes(route.request(), seen.safeRoute.length);
@@ -57,8 +91,19 @@ export async function mockApi(page, { routes = () => ({ body: makeResponse() }) 
       return route.abort();
     }
 
-    return route.fulfill(json(answer.body, answer.status ?? 200));
-  });
+    if (answer.status && answer.status !== 200) {
+      return route.fulfill(json(answer.body, answer.status));
+    }
+
+    if (streaming) {
+      return route.fulfill({ status: 200, contentType: "application/x-ndjson", body: ndjson(answer.body) });
+    }
+
+    return route.fulfill(json(answer.body));
+  };
+
+  await page.route("**/safe-route/stream", handle(true));
+  await page.route("**/safe-route", handle(false));
 
   return seen;
 }
@@ -93,5 +138,9 @@ export const card = (page, name) => page.getByRole("button", { name: new RegExp(
 export const preference = (page, name) =>
   page.getByRole("group", { name: "Route preference" }).getByRole("button", { name, exact: true });
 
-// The score ring in the details panel (the cards carry the same label).
+// The score ring in the details panel (cards show the score as text).
 export const scoreRing = (page, text) => page.getByRole("img", { name: text });
+
+// The map-layer toggles.
+export const layer = (page, name) =>
+  page.getByRole("group", { name: "Map layers" }).getByRole("button", { name });

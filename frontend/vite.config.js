@@ -4,20 +4,12 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  build: {
-    // Vendor code is split so the map page loads its heavy libraries
-    // separately from the landing page.
-    rolldownOptions: {
-      output: {
-        codeSplitting: {
-          groups: [
-            { name: 'leaflet', test: (id) => /node_modules.*(leaflet)/.test(id) },
-            { name: 'mui', test: (id) => /node_modules.*(@mui|@emotion)/.test(id) },
-          ],
-        },
-      },
-    },
-  },
+  // MapLibre starts its own web worker, which Vite's dev pre-bundler breaks
+  // (see scripts/copy-maplibre.mjs for how production serves the worker).
+  optimizeDeps: { exclude: ['maplibre-gl', '@maplibre/maplibre-gl-leaflet'] },
+  // Code is split along the lazy imports: the planner (with Leaflet), the
+  // 3D hero (three.js) and the vector map engine (MapLibre) are each
+  // downloaded only when needed.
   test: {
     environment: 'jsdom',
     setupFiles: './src/test/setup.js',

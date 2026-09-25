@@ -459,18 +459,20 @@ async def safe_route_stream(body: RouteRequest, request: Request):
 # deployment is one container on one origin (no CORS to configure).
 # Hashed assets are cached for a year; index.html is never cached so a
 # new release is picked up. The page ships a Content-Security-Policy
-# that allows only what the app uses: its own scripts, OpenStreetMap
-# map tiles and Google Fonts.
+# that allows only what the app uses: its own scripts and fonts, and the
+# basemap (OpenFreeMap vector tiles, OpenStreetMap raster fallback).
 #
 # ==================================================
 
 CONTENT_SECURITY_POLICY = "; ".join([
     "default-src 'self'",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' https://fonts.gstatic.com",
-    "img-src 'self' data: https://*.tile.openstreetmap.org https://tile.openstreetmap.org",
-    "connect-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
+    "img-src 'self' data: blob: https://tile.openstreetmap.org https://tiles.openfreemap.org",
+    "connect-src 'self' https://tiles.openfreemap.org",
+    "worker-src 'self' blob:",
+    "child-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",
     "frame-ancestors 'none'",

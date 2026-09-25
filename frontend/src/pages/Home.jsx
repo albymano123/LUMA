@@ -1,28 +1,28 @@
-import { Box, Container } from "@mui/material";
+import Navbar from "../layout/Navbar";
+import Footer from "../layout/Footer";
+import { Hero, TrustStrip } from "./landing/Hero";
+import { Awareness, ComparisonDemo, SafetyIntelligence } from "./landing/Interactive";
+import { FinalCta, HowItWorks, Journeys, Why } from "./landing/Sections";
+import "./landing/landing.css";
 
-import Navbar from "../components/Navbar";
-import Hero from "../components/Hero";
-import Features from "../components/Features";
-import EmergencySOS from "../components/EmergencySOS";
-import Footer from "../components/Footer";
-
-// Landing page. Route planning lives on /map (MapPage).
-function Home() {
+export default function Home() {
   return (
-    <Box sx={{ bgcolor: "background.default" }}>
+    <div className="lp-page">
       <Navbar />
 
-      <Hero />
-
-      <Features />
-
-      <Container maxWidth="lg" sx={{ pb: { xs: 8, md: 11 } }}>
-        <EmergencySOS />
-      </Container>
+      <main id="main">
+        <Hero />
+        <TrustStrip />
+        <Why />
+        <HowItWorks />
+        <SafetyIntelligence />
+        <ComparisonDemo />
+        <Awareness />
+        <Journeys />
+        <FinalCta />
+      </main>
 
       <Footer />
-    </Box>
+    </div>
   );
 }
-
-export default Home;
