@@ -14,6 +14,11 @@ POST /safe-route {source, destination, mode}
   6. typed response      (schemas.py)
 ```
 
+`POST /safe-route/stream` runs the same pipeline and streams newline-delimited JSON events
+(`routes`, `weather`, `map_data`, then `result` or `error`), each sent only when that stage has really
+finished. The web app uses it for honest progress. It is exempt from gzip, which would hold the small
+events back until the end (there is a regression test).
+
 Typical total: **about 3 seconds** (it was about 25 s with live Overpass queries).
 
 ## Modules

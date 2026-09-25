@@ -14,15 +14,25 @@ surroundings are, street activity, lighting, road and traffic exposure, weather)
 
 ## What it does
 
-- Search a start and destination with autocomplete, or use your current location
+- Search a start and destination with autocomplete (fully keyboard accessible), or use your current location
 - Walking, cycling or driving
-- 3 to 5 genuinely different route alternatives, drawn on an interactive map
-- For each route: distance, time, safety score, risk level, confidence and plain-English reasons
+- 3 to 5 genuinely different route alternatives, drawn on a crisp vector map
+- **Honest, streamed progress** while a trip is analysed: each step ticks only when the backend really finished it
+- For each route: distance, time, safety score ring, risk level, confidence, key factors and plain-English reasons ("Why this route?")
 - **Safest / Balanced / Time-efficient** choices, with *selected* and *recommended* kept separate
-- Hospitals, clinics, police and fire stations near the selected route (with phone numbers where mapped)
-- Weather along the route
+- Animated, clustered markers for hospitals, clinics, police and fire stations (hours and phone only where mapped)
+- Map layers: Emergency services, Weather, and **Safety factors** (real stretches with no mapped buildings)
+- Weather along the route, with quiet animated conditions
 - A "Route environment" panel of real OpenStreetMap facts (road types, sidewalks, junctions, buildings...)
-- Works on phones
+- Phone layout with a draggable bottom sheet; an emergency page with verified helplines and a share-my-location message
+- A cinematic landing page with a lazy-loaded 3D hero that falls back to 2D on slow devices
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Landing](docs/screenshots/landing-desktop.png) | ![Planner](docs/screenshots/routes-desktop.png) |
+| ![Layers](docs/screenshots/layers-desktop.png) | ![Phone](docs/screenshots/routes-phone-open.png) |
 
 ## Architecture
 
@@ -43,7 +53,7 @@ surroundings are, street activity, lighting, road and traffic exposure, weather)
    └─ safety.py  ── the single source of truth for scores and recommendations
 ```
 
-Key decisions (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)):
+Key decisions (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SAFETY_SCORE.md](docs/SAFETY_SCORE.md) and [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md)):
 
 - **Local OpenStreetMap database.** The free public Overpass servers are slow and rate-limit
   clients, which made results unreliable (25 s per search, frequent "insufficient data").
@@ -89,17 +99,18 @@ To cover another region, build the database from that region's extract
 ## Tests
 
 ```bash
-cd backend  && venv/Scripts/python -m pytest -q           # 148 backend tests
-cd frontend && npm test                                   # component tests
+cd backend  && venv/Scripts/python -m pytest -q             # 166 backend tests
+cd frontend && npm test                                     # 102 unit / component tests
 cd frontend && npm run lint && npm run build
-cd frontend && npx playwright install chromium            # once
-cd frontend && npm run test:e2e                           # browser tests (mocked network)
-cd frontend && LIVE=1 npx playwright test e2e/live.spec.js  # real backend + real services
+cd frontend && npx playwright install chromium              # once
+cd frontend && npm run test:e2e                             # ~100 browser tests: behaviour, accessibility (axe), performance budgets
+cd frontend && LIVE=1 npx playwright test e2e/live.spec.js  # real backend + real data (start the backend first)
 ```
 
 `backend/tests/test_real_data.py` checks the pipeline against the real Kerala database
 (city is far more built-up than a forest road, hospitals really are near Kochi, the coverage
 polygon excludes Delhi and the Tamil Nadu border, results are deterministic...).
+`backend/scripts/validate_trips.py` runs 13 real trips through the whole pipeline and checks each answer.
 
 ## Configuration
 
@@ -138,8 +149,9 @@ so. The ML estimate never influences ranking.
 ```
 backend/    FastAPI app: main.py, safety.py, route_analyzer.py, routing_service.py,
             geo_context.py, geodata/ (database build + queries), ml/ (experimental pipeline), tests/
-frontend/   React + Vite + MUI + Leaflet, unit tests (Vitest) and browser tests (Playwright)
-docs/       Architecture, safety-score method, deployment, demo guide
+frontend/   React + Vite, custom design system, Leaflet + MapLibre map, three.js hero;
+            unit tests (Vitest) and browser tests (Playwright, axe)
+docs/       Architecture, safety-score method, design system, deployment, demo guide, screenshots
 Dockerfile  One-image deployment      render.yaml  Render blueprint
 ```
 

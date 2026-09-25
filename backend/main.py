@@ -74,7 +74,24 @@ app = FastAPI(
     version=VERSION,
 )
 
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+class CompressExceptStreams(GZipMiddleware):
+    """
+    Compresses responses, except the progress stream: gzip holds small
+    chunks back until it has enough to compress, which would deliver every
+    progress event at once, at the end, instead of as each stage finishes.
+    """
+
+    STREAMS = ("/safe-route/stream",)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"] in self.STREAMS:
+            await self.app(scope, receive, send)
+            return
+
+        await super().__call__(scope, receive, send)
+
+
+app.add_middleware(CompressExceptStreams, minimum_size=1000)
 
 # No cookies or credentials are used, so credentials stay disabled.
 app.add_middleware(
@@ -468,7 +485,7 @@ CONTENT_SECURITY_POLICY = "; ".join([
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "font-src 'self'",
+    "font-src 'self' data:",
     "img-src 'self' data: blob: https://tile.openstreetmap.org https://tiles.openfreemap.org",
     "connect-src 'self' https://tiles.openfreemap.org",
     "worker-src 'self' blob:",

@@ -64,6 +64,6 @@ re-run `python -m geodata.build`. The extract date is shown in the app and at `/
 
 ## Security notes
 
-Content-Security-Policy, `X-Frame-Options`, `nosniff` and a strict CORS list are set; the container
+Content-Security-Policy (own scripts and self-hosted fonts; OpenFreeMap vector tiles and OpenStreetMap raster tiles for the map; MapLibre's blob workers), `X-Frame-Options`, `nosniff` and a strict CORS list are set; the container
 runs as a non-root user; per-client rate limits protect the free public services LumaPath depends on;
 errors return a request id, never internals; coordinates are not logged.

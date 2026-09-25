@@ -493,3 +493,16 @@ def test_isolated_stretches_are_reported_with_real_coordinates(api, monkeypatch)
 def test_a_fully_built_up_route_has_no_highlights(api):
     for route in post(api).json()["routes"]:
         assert route["highlights"] == []
+
+
+def test_progress_stream_is_never_compressed_so_events_are_not_held_back(api):
+    response = api.post("/safe-route/stream", json=BODY, headers={"Accept-Encoding": "gzip"})
+
+    assert "content-encoding" not in response.headers
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_ordinary_responses_are_still_compressed(api):
+    response = api.post("/safe-route", json=BODY, headers={"Accept-Encoding": "gzip"})
+
+    assert response.headers.get("content-encoding") == "gzip"
