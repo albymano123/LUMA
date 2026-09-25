@@ -11,6 +11,7 @@ User-Agent, and keep users' partial search text out of third-party
 logs as far as possible.
 """
 
+import asyncio
 import logging
 
 import httpx
@@ -89,60 +90,43 @@ def _format_nominatim(item):
 # SEARCH
 # ==================================================
 
-async def search_places(query, near_lat=None, near_lon=None, limit=6):
+# LumaPath is for India, and above all Kerala: suggestions are limited to
+# India, and places in Kerala are listed first.
+KERALA_BBOX = (74.8, 8.1, 77.5, 12.9)      # min lon, min lat, max lon, max lat
+INDIA_BBOX = (68.0, 6.5, 97.5, 35.7)
+KERALA_CENTRE = (10.5, 76.4)
 
-    query = query.strip()
 
-    if len(query) < 3:
-        return []
+def _bbox(box):
+    return ",".join(str(value) for value in box)
 
-    bias = (
-        (round(near_lat, 1), round(near_lon, 1))
-        if near_lat is not None and near_lon is not None
-        else None
+
+def _in_india(feature):
+    # Photon reports a country code; anything that is not India is dropped.
+    return feature.get("properties", {}).get("countrycode") in (None, "IN")
+
+
+async def _photon(client, query, limit, bias, bbox):
+
+    response = await client.get(
+        PHOTON_SEARCH_URL,
+        params={
+            "q": query, "limit": limit, "lang": "en",
+            "lat": bias[0], "lon": bias[1], "bbox": _bbox(bbox),
+        },
     )
+    response.raise_for_status()
 
-    cache_key = (query.lower(), bias, limit)
-    cached = _search_cache.get(cache_key)
+    return [
+        _format_photon(feature)
+        for feature in response.json().get("features", [])
+        if _in_india(feature)
+    ]
 
-    if cached is not None:
-        return cached
 
-    params = {"q": query, "limit": limit, "lang": "en"}
+def _unique(results):
+    """Photon can return the same place several times (node + way)."""
 
-    if bias:
-        params["lat"], params["lon"] = bias
-
-    results = []
-
-    async with httpx.AsyncClient(timeout=8.0, headers=HEADERS) as client:
-
-        try:
-            response = await client.get(PHOTON_SEARCH_URL, params=params)
-            response.raise_for_status()
-
-            results = [
-                _format_photon(feature)
-                for feature in response.json().get("features", [])
-            ]
-
-        except (httpx.HTTPError, ValueError, KeyError) as error:
-            logger.warning("Photon search failed, trying Nominatim: %s", error)
-
-            try:
-                response = await client.get(
-                    NOMINATIM_SEARCH_URL,
-                    params={"q": query, "format": "json", "limit": limit},
-                )
-                response.raise_for_status()
-
-                results = [_format_nominatim(item) for item in response.json()]
-
-            except (httpx.HTTPError, ValueError, KeyError) as fallback_error:
-                logger.warning("Nominatim search failed: %s", fallback_error)
-                return []
-
-    # Photon can return the same place several times (node + way).
     unique = []
     seen = set()
 
@@ -153,9 +137,79 @@ async def search_places(query, near_lat=None, near_lon=None, limit=6):
             seen.add(key)
             unique.append(result)
 
-    _search_cache.set(cache_key, unique)
-
     return unique
+
+
+async def search_places(query, near_lat=None, near_lon=None, limit=8):
+    """
+    Place suggestions for India, Kerala first.
+
+    Two searches run together: one restricted to Kerala and one to India.
+    Kerala's results come first; the rest of India fills any remaining
+    slots, so a Kerala town is never buried under a same-named place far
+    away, while places elsewhere in India can still be found.
+    """
+
+    query = query.strip()
+
+    if len(query) < 3:
+        return []
+
+    # Bias towards the other end of the trip when the trip is in Kerala,
+    # otherwise towards Kerala's centre.
+    other_end_in_kerala = (
+        near_lat is not None
+        and near_lon is not None
+        and KERALA_BBOX[1] <= near_lat <= KERALA_BBOX[3]
+        and KERALA_BBOX[0] <= near_lon <= KERALA_BBOX[2]
+    )
+    bias = (round(near_lat, 1), round(near_lon, 1)) if other_end_in_kerala else KERALA_CENTRE
+
+    cache_key = (query.lower(), bias, limit)
+    cached = _search_cache.get(cache_key)
+
+    if cached is not None:
+        return cached
+
+    results = []
+
+    async with httpx.AsyncClient(timeout=8.0, headers=HEADERS) as client:
+
+        try:
+            kerala, india = await asyncio.gather(
+                _photon(client, query, limit, bias, KERALA_BBOX),
+                _photon(client, query, limit, bias, INDIA_BBOX),
+            )
+
+            # At most 5 from Kerala, so a well-known place elsewhere in India
+            # is not pushed out by weaker matches in Kerala.
+            results = _unique(kerala[:5] + india)[:limit]
+
+        except (httpx.HTTPError, ValueError, KeyError) as error:
+            logger.warning("Photon search failed, trying Nominatim: %s", error)
+
+            try:
+                west, south, east, north = KERALA_BBOX
+                response = await client.get(
+                    NOMINATIM_SEARCH_URL,
+                    params={
+                        "q": query, "format": "json", "limit": limit,
+                        "countrycodes": "in",
+                        # Prefer Kerala without excluding the rest of India.
+                        "viewbox": f"{west},{north},{east},{south}", "bounded": 0,
+                    },
+                )
+                response.raise_for_status()
+
+                results = _unique([_format_nominatim(item) for item in response.json()])
+
+            except (httpx.HTTPError, ValueError, KeyError) as fallback_error:
+                logger.warning("Nominatim search failed: %s", fallback_error)
+                return []
+
+    _search_cache.set(cache_key, results)
+
+    return results
 
 
 # ==================================================

@@ -191,9 +191,11 @@ def test_repeated_searches_are_cached(monkeypatch):
     requests = serve(monkeypatch, geo, lambda r: httpx.Response(200, json=photon(("Chalakudy", 10.3, 76.3))))
 
     search()
+    after_first = len(requests)
     search()
 
-    assert len(requests) == 1
+    assert after_first == 2          # one Kerala search + one India search
+    assert len(requests) == after_first
 
 
 def test_reverse_geocode_falls_back_to_a_plain_point_never_a_fake_address(monkeypatch):
@@ -261,3 +263,106 @@ def test_weather_recovers_after_the_pause(monkeypatch):
 
 def test_slow_weather_is_given_up_on_quickly(monkeypatch):
     assert weather.WEATHER_TIMEOUT_S <= 5
+
+
+# ============================ Kerala first, India only ============================
+
+def photon_in(country, *features):
+    body = photon(*features)
+    for feature in body["features"]:
+        feature["properties"]["countrycode"] = country
+    return body
+
+
+def test_kerala_results_come_before_other_indian_places(monkeypatch):
+    def handler(request):
+        bbox = request.url.params["bbox"]
+
+        if bbox.startswith("74.8"):      # the Kerala-restricted search
+            return httpx.Response(200, json=photon_in("IN", ("Kottayam, Kerala", 9.59, 76.52)))
+
+        return httpx.Response(200, json=photon_in(
+            "IN", ("Kottayam, Bihar", 25.0, 85.0), ("Kottayam, Kerala", 9.59, 76.52),
+        ))
+
+    serve(monkeypatch, geo, handler)
+
+    names = [place["name"] for place in search("Kottayam")]
+
+    assert names == ["Kottayam, Kerala", "Kottayam, Bihar"]
+
+
+def test_the_search_is_limited_to_kerala_and_to_india(monkeypatch):
+    requests = serve(monkeypatch, geo, lambda r: httpx.Response(200, json=photon()))
+
+    search("Chalakudy")
+
+    boxes = sorted(request.url.params["bbox"] for request in requests)
+
+    assert boxes == ["68.0,6.5,97.5,35.7", "74.8,8.1,77.5,12.9"]
+
+
+def test_places_outside_india_are_never_suggested(monkeypatch):
+    serve(monkeypatch, geo, lambda r: httpx.Response(200, json=photon_in("LK", ("Colombo", 6.9, 79.8))))
+
+    assert search("Colombo") == []
+
+
+def test_it_is_biased_towards_kerala_unless_the_trip_is_elsewhere(monkeypatch):
+    requests = serve(monkeypatch, geo, lambda r: httpx.Response(200, json=photon()))
+
+    search("Kodakara")
+    assert requests[0].url.params["lat"] == "10.5" and requests[0].url.params["lon"] == "76.4"
+
+    requests.clear()
+    geo._search_cache = geo.TTLCache(ttl_seconds=60)
+
+    # The other end of the trip is in Kerala: bias towards it.
+    search("Kodakara", 9.9, 76.3)
+    assert requests[0].url.params["lat"] == "9.9"
+
+    requests.clear()
+    geo._search_cache = geo.TTLCache(ttl_seconds=60)
+
+    # The other end is in Delhi: still search near Kerala's centre.
+    search("Kodakara", 28.6, 77.2)
+    assert requests[0].url.params["lat"] == "10.5"
+
+
+def test_a_place_elsewhere_in_india_can_still_be_found(monkeypatch):
+    def handler(request):
+        if request.url.params["bbox"].startswith("74.8"):
+            return httpx.Response(200, json=photon())
+
+        return httpx.Response(200, json=photon_in("IN", ("Jaipur", 26.9, 75.8)))
+
+    serve(monkeypatch, geo, handler)
+
+    assert [place["name"] for place in search("Jaipur")] == ["Jaipur"]
+
+
+def test_nominatim_fallback_is_also_india_only_and_prefers_kerala(monkeypatch):
+    requests = serve(monkeypatch, geo, lambda r: httpx.Response(503) if "photon" in r.url.host else httpx.Response(200, json=[]))
+
+    search()
+
+    fallback = next(request for request in requests if "nominatim" in request.url.host)
+
+    assert fallback.url.params["countrycodes"] == "in"
+    assert fallback.url.params["viewbox"] == "74.8,12.9,77.5,8.1"
+
+
+def test_kerala_cannot_crowd_out_the_rest_of_india(monkeypatch):
+    def handler(request):
+        if request.url.params["bbox"].startswith("74.8"):
+            return httpx.Response(200, json=photon_in("IN", *[(f"Kerala match {i}", 10 + i / 10, 76.3) for i in range(8)]))
+
+        return httpx.Response(200, json=photon_in("IN", ("Delhi", 28.6, 77.2)))
+
+    serve(monkeypatch, geo, handler)
+
+    names = [place["name"] for place in search("Delhi")]
+
+    assert len(names) == 6
+    assert names[:5] == [f"Kerala match {i}" for i in range(5)]
+    assert "Delhi" in names

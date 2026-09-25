@@ -119,7 +119,7 @@ export default function PlaceSearch({ label, value, onChange, near, icon, autoFo
           autoCorrect="off"
           spellCheck={false}
           autoFocus={autoFocus}
-          placeholder={label === "Start" ? "Where are you starting?" : "Where to?"}
+          placeholder={label === "Start" ? "Starting point in Kerala or India" : "Destination in Kerala or India"}
           value={text}
           onChange={(event) => {
             setText(event.target.value);
