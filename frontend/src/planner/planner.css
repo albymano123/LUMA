@@ -2,7 +2,7 @@
 
 .planner { height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
 .planner__stage { position: relative; flex: 1; min-height: 0; }
-.planner__map { position: absolute; inset: 0; }
+.planner__map { position: absolute; inset: 0; z-index: 0; isolation: isolate; }   /* contains Leaflet's own z-indexes */
 
 .muted-text { color: var(--muted); font-size: var(--fs-small); line-height: 1.55; }
 .link-button {
@@ -385,3 +385,7 @@
 @media (max-width: 899px) {
   .rd__stats { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Phones: keep the map's zoom buttons and attribution above the sheet's
+   peek line, where they stay visible and never sit on top of the results. */
+.planner[data-phone="true"] .leaflet-bottom { bottom: 156px; }
