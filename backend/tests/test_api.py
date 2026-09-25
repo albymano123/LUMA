@@ -359,3 +359,137 @@ def test_security_headers_and_request_id(api):
 
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert len(response.headers["X-Request-ID"]) == 12
+
+
+# ---------------- streaming progress ----------------
+
+def read_stream(client, body=BODY):
+    import json
+
+    response = client.post("/safe-route/stream", json=body)
+    events = [json.loads(line) for line in response.text.splitlines() if line]
+
+    return response, events
+
+
+def test_stream_reports_real_stages_then_the_same_result(api):
+    response, events = read_stream(api)
+    names = [event["event"] for event in events]
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    assert names[-1] == "result"
+    assert {"routes", "weather", "map_data"} <= set(names)
+    assert events[names.index("routes")]["count"] == 2
+    assert events[names.index("map_data")]["source"] == "local"
+
+    # The streamed result is exactly what /safe-route returns.
+    plain = post(api).json()
+    streamed = events[-1]["data"]
+    assert [r["id"] for r in streamed["routes"]] == [r["id"] for r in plain["routes"]]
+    assert streamed["recommendation"] == plain["recommendation"]
+
+
+def test_stream_only_reports_a_stage_when_it_has_finished(api, monkeypatch):
+    import asyncio
+
+    finished = []
+
+    async def slow_geo(_geometries, _mode="walking"):
+        await asyncio.sleep(0.3)
+        finished.append("map_data")
+        return fake_context()
+
+    monkeypatch.setattr(route_analyzer, "get_geo_context", slow_geo)
+
+    import json
+    import time
+
+    started = time.monotonic()
+    times = {}
+
+    with api.stream("POST", "/safe-route/stream", json=BODY) as response:
+        for line in response.iter_lines():
+            if line:
+                event = json.loads(line)
+                times[event["event"]] = time.monotonic() - started
+
+    assert finished == ["map_data"]
+    # The map-data event cannot arrive before the (0.3 s) load finished.
+    assert times["map_data"] >= 0.3
+    assert times["routes"] < times["map_data"]
+
+
+def test_stream_ends_with_an_error_event_when_routing_fails(api, monkeypatch):
+    async def down(*_a, **_k):
+        raise RuntimeError("osrm exploded: secret-detail")
+
+    monkeypatch.setattr(main, "get_alternative_routes", down)
+
+    response, events = read_stream(api)
+
+    assert response.status_code == 200          # the stream itself worked
+    assert events[-1]["event"] == "error"
+    assert events[-1]["status"] == 502
+    assert events[-1]["request_id"]
+    assert "secret-detail" not in response.text
+    assert "result" not in [e["event"] for e in events]
+
+
+def test_stream_reports_routing_not_found(api, monkeypatch):
+    async def none_found(*_a, **_k):
+        raise RoutingError("No route could be found between these locations.")
+
+    monkeypatch.setattr(main, "get_alternative_routes", none_found)
+
+    _, events = read_stream(api)
+
+    assert events[-1] == {**events[-1], "event": "error", "status": 404,
+                          "message": "No route could be found between these locations."}
+
+
+def test_stream_validates_the_request_like_the_plain_endpoint(api):
+    assert api.post("/safe-route/stream", json={**BODY, "source_lat": 999}).status_code == 422
+
+    _, events = read_stream(api, {**BODY, "destination_lat": BODY["source_lat"], "destination_lon": BODY["source_lon"]})
+
+    assert events[-1]["event"] == "error" and events[-1]["status"] == 400
+
+
+def test_stream_is_rate_limited(api, monkeypatch):
+    monkeypatch.setitem(main.RATE_LIMITS, "/safe-route/stream", (1, 60))
+
+    assert api.post("/safe-route/stream", json=BODY).status_code == 200
+    assert api.post("/safe-route/stream", json=BODY).status_code == 429
+
+
+# ---------------- highlights ----------------
+
+def test_isolated_stretches_are_reported_with_real_coordinates(api, monkeypatch):
+    # Buildings for the first 40% of the route, none after.
+    def counts(samples):
+        n = len(samples)
+        return np.array([8 if i < n * 0.4 else 0 for i in range(n)])
+
+    async def geo(_geometries, _mode="walking"):
+        return fake_context(building_counts=counts)
+
+    monkeypatch.setattr(route_analyzer, "get_geo_context", geo)
+
+    route = post(api).json()["routes"][0]
+
+    assert route["highlights"], "a long empty stretch must be reported"
+
+    stretch = route["highlights"][0]
+    assert stretch["kind"] == "unbuilt"
+    assert stretch["length_km"] >= 0.25
+    assert len(stretch["coordinates"]) >= 2
+
+    # The stretch lies on the route itself.
+    route_lons = [c[0] for c in route["geometry"]["coordinates"]]
+    assert min(route_lons) - 0.01 <= stretch["coordinates"][0][0] <= max(route_lons) + 0.01
+
+
+def test_a_fully_built_up_route_has_no_highlights(api):
+    for route in post(api).json()["routes"]:
+        assert route["highlights"] == []

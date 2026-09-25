@@ -20,7 +20,7 @@ building_cells  number of mapped buildings per ~50 m grid cell (a compact
             proxy for "built-up, people around" without storing 2.6M footprints)
 """
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # kinds stored in pois.kind
 EMERGENCY_KINDS = ("hospital", "clinic", "police", "fire_station")
@@ -43,7 +43,8 @@ CREATE TABLE pois (
     phone TEXT,
     emergency_ward INTEGER NOT NULL DEFAULT 0,
     lon REAL NOT NULL,
-    lat REAL NOT NULL
+    lat REAL NOT NULL,
+    opening_hours TEXT
 );
 CREATE VIRTUAL TABLE pois_idx USING rtree(id, min_lon, max_lon, min_lat, max_lat);
 

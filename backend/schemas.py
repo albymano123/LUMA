@@ -39,10 +39,22 @@ class EmergencyService(BaseModel):
     name: str | None = None
     phone: str | None = None
     emergency_ward: bool = False
+    opening_hours: str | None = Field(default=None, description="As mapped in OpenStreetMap; null when nobody mapped it")
     lat: float
     lon: float
     distance_m: int
     along_route_km: float
+
+
+class Highlight(BaseModel):
+    """A stretch of the route worth pointing out, measured from real map data."""
+
+    kind: Literal["unbuilt"]
+    label: str
+    from_km: float
+    to_km: float
+    length_km: float
+    coordinates: list[list[float]]
 
 
 class Geometry(BaseModel):
@@ -75,6 +87,7 @@ class RouteResult(BaseModel):
     police_station_count: int
     fire_station_count: int
 
+    highlights: list[Highlight] = []
     route_features: dict[str, Any] = Field(description="Environment facts from OpenStreetMap; not safety data")
     ml_estimate: dict[str, Any] = Field(description="Experimental; status 'not_trained' until real incident data exists")
 

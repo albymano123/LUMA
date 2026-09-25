@@ -209,6 +209,7 @@ def classify_elements(elements):
                 "name": tags.get("name") or tags.get("name:en"),
                 "phone": tags.get("phone") or tags.get("contact:phone"),
                 "emergency_ward": tags.get("emergency") == "yes",
+                "opening_hours": tags.get("opening_hours"),
                 "lon": position[0],
                 "lat": position[1],
             })

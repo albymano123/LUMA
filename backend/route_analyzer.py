@@ -249,11 +249,54 @@ def _measure_buildings(coordinates, context):
 
     counts = context["building_counts"](samples)
     built = counts >= BUILT_UP_MIN_BUILDINGS
+    along_km = _cumulative_km(samples)
 
     return {
         "built_up_share": round(float(built.mean()), 3),
-        "longest_unbuilt_km": _longest_run_km(~built, _cumulative_km(samples)),
+        "longest_unbuilt_km": _longest_run_km(~built, along_km),
+        "highlights": _isolated_stretches(samples, ~built, along_km),
     }
+
+
+# Stretches shorter than this are not worth pointing out on the map.
+MIN_HIGHLIGHT_KM = 0.25
+MAX_HIGHLIGHTS = 6
+
+
+def _isolated_stretches(samples, unbuilt, along_km):
+    """
+    The longest unbroken stretches with no mapped buildings nearby, with
+    the coordinates to draw them. These are real measurements of the
+    route, shown on the map's "Safety factors" layer.
+    """
+
+    stretches = []
+    start = None
+
+    for index, value in enumerate(unbuilt):
+
+        if value and start is None:
+            start = index
+
+        if start is not None and (not value or index == len(unbuilt) - 1):
+            end = index if value else index - 1
+            length = along_km[end] - along_km[start]
+
+            if length >= MIN_HIGHLIGHT_KM:
+                stretches.append({
+                    "kind": "unbuilt",
+                    "label": "No mapped buildings nearby",
+                    "from_km": round(along_km[start], 2),
+                    "to_km": round(along_km[end], 2),
+                    "length_km": round(length, 2),
+                    "coordinates": [[round(lon, 6), round(lat, 6)] for lon, lat in samples[start:end + 1]],
+                })
+
+            start = None
+
+    stretches.sort(key=lambda stretch: -stretch["length_km"])
+
+    return sorted(stretches[:MAX_HIGHLIGHTS], key=lambda stretch: stretch["from_km"])
 
 
 def _closest_per_kind(services):
@@ -392,7 +435,7 @@ def _data_sources(context, weather_readings):
     return sources
 
 
-async def analyze_all_routes(routes, mode="walking"):
+async def analyze_all_routes(routes, mode="walking", progress=None):
 
     started = time.monotonic()
     geometries = [route["geometry"]["coordinates"] for route in routes]
@@ -409,8 +452,20 @@ async def analyze_all_routes(routes, mode="walking"):
 
         route_point_indexes.append(indexes)
 
+    async def load_map_data():
+        loaded = await get_geo_context(geometries, mode)
+
+        if progress is not None:
+            await progress("map_data", {
+                "source": loaded["source"],
+                "emergency_services": loaded["emergency_available"],
+                "road_network": loaded["network_available"],
+            })
+
+        return loaded
+
     context, weather_readings = await asyncio.gather(
-        get_geo_context(geometries, mode),
+        load_map_data(),
         get_weather_for_points(weather_points),
     )
 
@@ -426,6 +481,7 @@ async def analyze_all_routes(routes, mode="walking"):
         safety = calculate_safety_score(metrics, weather, mode)
 
         services = metrics.pop("services")
+        highlights = metrics.pop("highlights", [])
         route_features = _route_features(coordinates, metrics)
 
         ml_estimate = estimate_for_route(
@@ -448,6 +504,7 @@ async def analyze_all_routes(routes, mode="walking"):
             "hospital_count": sum(s["kind"] in ("hospital", "clinic") for s in services),
             "police_station_count": sum(s["kind"] == "police" for s in services),
             "fire_station_count": sum(s["kind"] == "fire_station" for s in services),
+            "highlights": highlights,
             "route_features": route_features,
             "ml_estimate": ml_estimate,
         })

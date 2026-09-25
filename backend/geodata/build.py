@@ -139,7 +139,7 @@ def _insert_pois(connection, pbf):
     batch = []
 
     def flush():
-        connection.executemany("INSERT INTO pois VALUES (?,?,?,?,?,?,?,?)", batch)
+        connection.executemany("INSERT INTO pois VALUES (?,?,?,?,?,?,?,?,?)", batch)
         connection.executemany(
             "INSERT INTO pois_idx VALUES (?,?,?,?,?)",
             [(row[0], row[6], row[6], row[7], row[7]) for row in batch],
@@ -182,6 +182,9 @@ def _insert_pois(connection, pbf):
             1 if tags.get("emergency") == "yes" else 0,
             position[0],
             position[1],
+            # Only emergency services carry hours; it is shown to the user
+            # exactly as mapped, and only when someone mapped it.
+            None if kind == ACTIVITY_KIND else tags.get("opening_hours"),
         ))
         counts[kind] = counts.get(kind, 0) + 1
         next_id += 1

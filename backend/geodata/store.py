@@ -149,7 +149,7 @@ class GeoStore:
 
         rows = self._connection().execute(
             """
-            SELECT p.osm_ref, p.kind, p.name, p.phone, p.emergency_ward, p.lon, p.lat
+            SELECT p.osm_ref, p.kind, p.name, p.phone, p.emergency_ward, p.lon, p.lat, p.opening_hours
             FROM pois_idx i JOIN pois p ON p.id = i.id
             WHERE i.max_lon >= ? AND i.min_lon <= ?
               AND i.max_lat >= ? AND i.min_lat <= ?
@@ -169,10 +169,11 @@ class GeoStore:
                 "name": name,
                 "phone": phone,
                 "emergency_ward": bool(ward),
+                "opening_hours": opening_hours,
                 "lon": lon,
                 "lat": lat,
             }
-            for reference, kind, name, phone, ward, lon, lat in rows
+            for reference, kind, name, phone, ward, lon, lat, opening_hours in rows
         ]
 
     def activity_places(self, route_geometries, radius_m):

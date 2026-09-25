@@ -8,6 +8,7 @@ GET /health. Interactive documentation is served at /docs.
 """
 
 import asyncio
+import json
 import logging
 import sys
 import time
@@ -18,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import settings
@@ -99,6 +100,7 @@ app.add_middleware(
 
 RATE_LIMITS = {
     "/safe-route": (settings.RATE_LIMIT_ROUTES, 60),
+    "/safe-route/stream": (settings.RATE_LIMIT_ROUTES, 60),
     "/geocode/search": (settings.RATE_LIMIT_SEARCH, 60),
     "/geocode/reverse": (settings.RATE_LIMIT_REVERSE, 60),
 }
@@ -257,16 +259,31 @@ async def geocode_reverse(
 # SAFE ROUTE
 # ==================================================
 
-@app.post(
-    "/safe-route",
-    response_model=SafeRouteResponse,
-    responses={
-        400: {"model": ErrorDetail},
-        404: {"model": ErrorDetail},
-        502: {"model": ErrorDetail},
-    },
-)
-async def safe_route(body: RouteRequest, request: Request):
+class TripError(Exception):
+    """A failure with the HTTP status and friendly message to report."""
+
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+async def run_trip(body: RouteRequest, progress=None):
+    """
+    The whole analysis for one trip. `progress(event, data)` (optional) is
+    awaited when a stage has REALLY finished, which is what lets the web
+    app show honest progress:
+
+        routes     the alternative routes exist          {"count": n}
+        weather    the weather lookup has finished       {"available": bool}
+        map_data   emergency services / roads loaded     {"source": "local"|"live"|"none", ...}
+
+    Raises TripError. Returns the response payload.
+    """
+
+    async def report(event, data):
+        if progress is not None:
+            await progress(event, data)
 
     straight_km = haversine_m(
         body.source_lat, body.source_lon,
@@ -274,15 +291,14 @@ async def safe_route(body: RouteRequest, request: Request):
     ) / 1000
 
     if straight_km < 0.05:
-        raise error(400, "Start and destination are the same place.", request)
+        raise TripError(400, "Start and destination are the same place.")
 
     if straight_km > MAX_TRIP_KM[body.mode]:
-        raise error(
+        raise TripError(
             400,
             f"This trip is too long for {body.mode} "
             f"(limit {MAX_TRIP_KM[body.mode]} km). "
             "Try a different travel mode or a closer destination.",
-            request,
         )
 
     started = time.monotonic()
@@ -310,32 +326,36 @@ async def safe_route(body: RouteRequest, request: Request):
 
     except RoutingError as routing_error:
         weather_task.cancel()
-        raise error(404, str(routing_error), request)
+        raise TripError(404, str(routing_error))
 
     except Exception:
         weather_task.cancel()
         logger.exception("Routing failed")
-        raise error(502, "The routing service is unavailable right now. Please try again shortly.", request)
+        raise TripError(502, "The routing service is unavailable right now. Please try again shortly.")
+
+    await report("routes", {"count": len(routes)})
 
     # Usually already done; a cache miss inside the analysis would fetch it again.
     try:
-        await asyncio.wait_for(asyncio.shield(weather_task), timeout=6)
+        weather_ok = await asyncio.wait_for(asyncio.shield(weather_task), timeout=6)
     except Exception:
-        pass
+        weather_ok = False
+
+    await report("weather", {"available": bool(weather_ok)})
 
     try:
         result = await asyncio.wait_for(
-            analyze_all_routes(routes, mode=body.mode),
+            analyze_all_routes(routes, mode=body.mode, progress=progress),
             timeout=ANALYSIS_TIMEOUT_S,
         )
 
     except asyncio.TimeoutError:
         logger.error("Route analysis timed out")
-        raise error(502, "Route analysis took too long. Please try again.", request)
+        raise TripError(502, "Route analysis took too long. Please try again.")
 
     except Exception:
         logger.exception("Route analysis failed")
-        raise error(500, "Unable to analyse routes right now. Please try again.", request)
+        raise TripError(500, "Unable to analyse routes right now. Please try again.")
 
     logger.info(
         "safe-route (%s): %d routes in %.1fs",
@@ -348,6 +368,87 @@ async def safe_route(body: RouteRequest, request: Request):
         "total_routes": len(result["routes"]),
         **result,
     }
+
+
+@app.post(
+    "/safe-route",
+    response_model=SafeRouteResponse,
+    responses={
+        400: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        502: {"model": ErrorDetail},
+    },
+)
+async def safe_route(body: RouteRequest, request: Request):
+
+    try:
+        return await run_trip(body)
+
+    except TripError as failure:
+        raise error(failure.status, failure.message, request)
+
+
+@app.post("/safe-route/stream", response_class=StreamingResponse)
+async def safe_route_stream(body: RouteRequest, request: Request):
+    """
+    The same analysis as /safe-route, streamed as newline-delimited JSON so
+    the web app can show real progress. Each line is one object:
+
+        {"event": "routes", "count": 5}
+        {"event": "weather", "available": true}
+        {"event": "map_data", "source": "local", "emergency_services": true, ...}
+        {"event": "result", "data": {...same as /safe-route...}}
+        {"event": "error", "status": 502, "message": "...", "request_id": "..."}
+
+    "result" or "error" is always the last line.
+    """
+
+    request_id = request.state.request_id
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def progress(event, data):
+        await queue.put({"event": event, **data})
+
+    async def worker():
+        try:
+            payload = await run_trip(body, progress)
+            validated = SafeRouteResponse.model_validate(payload).model_dump(mode="json")
+            await queue.put({"event": "result", "data": validated})
+
+        except TripError as failure:
+            await queue.put({"event": "error", "status": failure.status,
+                             "message": failure.message, "request_id": request_id})
+
+        except Exception:
+            logger.exception("Streaming analysis failed")
+            await queue.put({"event": "error", "status": 500,
+                             "message": "Unable to analyse routes right now. Please try again.",
+                             "request_id": request_id})
+
+        finally:
+            await queue.put(None)
+
+    async def lines():
+        task = asyncio.create_task(worker())
+
+        try:
+            while True:
+                item = await queue.get()
+
+                if item is None:
+                    break
+
+                yield json.dumps(item, separators=(",", ":")) + "\n"
+
+        finally:
+            # The client went away: stop working for nobody.
+            task.cancel()
+
+    return StreamingResponse(
+        lines(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 # ==================================================

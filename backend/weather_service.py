@@ -154,9 +154,13 @@ async def get_weather(latitude, longitude):
 
 
 async def prefetch(points):
-    """Warm the cache for `points`; never raises (this is only an optimisation)."""
+    """
+    Warm the cache for `points`; never raises (this is only an optimisation).
+    Returns whether any reading was obtained.
+    """
 
     try:
-        await get_weather_for_points(points)
+        return any(await get_weather_for_points(points))
     except Exception as error:
         logger.debug("Weather prefetch failed: %s", error)
+        return False

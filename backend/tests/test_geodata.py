@@ -43,13 +43,13 @@ def build_test_db(path, schema_version=SCHEMA_VERSION):
 
     pois = [
         # id, ref, kind, name, phone, ward, lon, lat
-        (1, "node-1", "hospital", "Near Hospital", "+91 1", 1, 76.2500, 10.2510),
-        (2, "node-2", "police", "Near Police", None, 0, 76.2540, 10.2490),
-        (3, "node-3", "clinic", "Far Clinic", None, 0, 76.4000, 10.4000),
-        (4, "node-4", "activity", None, None, 0, 76.2520, 10.2502),
-        (5, "node-5", "activity", None, None, 0, 76.4400, 10.4400),
+        (1, "node-1", "hospital", "Near Hospital", "+91 1", 1, 76.2500, 10.2510, "24/7"),
+        (2, "node-2", "police", "Near Police", None, 0, 76.2540, 10.2490, None),
+        (3, "node-3", "clinic", "Far Clinic", None, 0, 76.4000, 10.4000, "Mo-Sa 09:00-17:00"),
+        (4, "node-4", "activity", None, None, 0, 76.2520, 10.2502, None),
+        (5, "node-5", "activity", None, None, 0, 76.4400, 10.4400, None),
     ]
-    connection.executemany("INSERT INTO pois VALUES (?,?,?,?,?,?,?,?)", pois)
+    connection.executemany("INSERT INTO pois VALUES (?,?,?,?,?,?,?,?,?)", pois)
     connection.executemany(
         "INSERT INTO pois_idx VALUES (?,?,?,?,?)",
         [(p[0], p[6], p[6], p[7], p[7]) for p in pois],
@@ -148,6 +148,10 @@ def test_emergency_services_within_radius_only(store):
     hospital = next(s for s in found if s["kind"] == "hospital")
     assert hospital["emergency_ward"] is True
     assert hospital["phone"] == "+91 1"
+    assert hospital["opening_hours"] == "24/7"
+
+    police = next(s for s in found if s["kind"] == "police")
+    assert police["opening_hours"] is None      # not mapped: stays None, never invented
 
 
 def test_emergency_search_reaches_farther_when_asked(store):
