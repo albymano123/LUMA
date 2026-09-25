@@ -16,7 +16,7 @@ import threading
 import numpy as np
 
 from geo import resample_line
-from geodata.build import cell_key, decode_nodes
+from geodata.codec import cell_key, decode_nodes
 from geodata.coverage import inside_margin
 from geodata.schema import (
     ACTIVITY_KIND,

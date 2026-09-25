@@ -1,0 +1,15 @@
+# Render blueprint: one free web service running the Docker image.
+#   Render dashboard -> New -> Blueprint -> pick this repository.
+# The first build downloads OpenStreetMap Kerala and builds the map
+# database (about 5-10 minutes); later deploys reuse cached layers.
+services:
+  - type: web
+    name: lumapath
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: TRUST_PROXY
+        value: "true"
+      - key: LOG_LEVEL
+        value: INFO

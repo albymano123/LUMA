@@ -12,11 +12,14 @@ import logging
 import sys
 import time
 import uuid
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 import settings
 from cache import TTLCache
@@ -158,6 +161,28 @@ def error(status, message, request):
     )
 
 
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request: Request, _exc: RequestValidationError):
+    """
+    A short message instead of FastAPI's default, which echoes the
+    rejected input back (and cannot even serialise values such as NaN).
+    """
+
+    message = (
+        "Those locations could not be read. Please choose them again from the suggestions."
+        if request.url.path == "/safe-route"
+        else "The request could not be read."
+    )
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": ErrorDetail(
+            message=message,
+            request_id=getattr(request.state, "request_id", None),
+        ).model_dump()},
+    )
+
+
 # ==================================================
 # LIMITS
 # ==================================================
@@ -176,13 +201,17 @@ ANALYSIS_TIMEOUT_S = 60
 # ROOT / HEALTH
 # ==================================================
 
-@app.get("/")
-async def root():
+SERVING_WEB_APP = bool(settings.STATIC_DIR) and Path(settings.STATIC_DIR, "index.html").is_file()
 
-    return {"message": "LumaPath API is running", "docs": "/docs", "status": "OK"}
+if not SERVING_WEB_APP:
+
+    @app.api_route("/", methods=["GET", "HEAD"])
+    async def root():
+
+        return {"message": "LumaPath API is running", "docs": "/docs", "status": "OK"}
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     """Liveness plus what data is available (used by hosting health checks)."""
 
@@ -296,6 +325,67 @@ async def safe_route(body: RouteRequest, request: Request):
         "total_routes": len(result["routes"]),
         **result,
     }
+
+
+# ==================================================
+# WEB APP (optional)
+# ==================================================
+#
+# With STATIC_DIR set, the same service serves the built frontend, so a
+# deployment is one container on one origin (no CORS to configure).
+# Hashed assets are cached for a year; index.html is never cached so a
+# new release is picked up. The page ships a Content-Security-Policy
+# that allows only what the app uses: its own scripts, OpenStreetMap
+# map tiles and Google Fonts.
+#
+# ==================================================
+
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: https://*.tile.openstreetmap.org https://tile.openstreetmap.org",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+])
+
+HTML_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "X-Frame-Options": "DENY",
+}
+
+
+class ImmutableStaticFiles(StaticFiles):
+    """Static files whose names contain a content hash: cache them for good."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
+if SERVING_WEB_APP:
+
+    _static = Path(settings.STATIC_DIR).resolve()
+
+    if (_static / "assets").is_dir():
+        app.mount("/assets", ImmutableStaticFiles(directory=_static / "assets"), name="assets")
+
+    @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    async def web_app(path: str):
+        """Files from the build (favicon...) or, for any page route, index.html."""
+
+        candidate = (_static / path).resolve()
+
+        if path and candidate.is_file() and _static in candidate.parents:
+            return FileResponse(candidate, headers={"Cache-Control": "public, max-age=3600"})
+
+        return FileResponse(_static / "index.html", headers=HTML_HEADERS)
 
 
 # ==================================================

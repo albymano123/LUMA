@@ -1,16 +1,24 @@
-# React + Vite
+# LumaPath frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React 19 + Vite + Material UI + React Leaflet. See the [project README](../README.md) for the whole system.
 
-Currently, two official plugins are available:
+```bash
+npm install
+npm run dev          # http://localhost:5173  (API at VITE_API_URL, default http://127.0.0.1:8000)
+npm run build        # production build in dist/
+npm run lint
+npm test             # component tests (Vitest + Testing Library)
+npx playwright install chromium   # once
+npm run test:e2e     # browser tests against the production build, network mocked
+LIVE=1 npx playwright test e2e/live.spec.js   # real backend and services (start the backend first)
+```
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+The UI never calculates a safety score. It displays what the backend returns, including the
+recommendation state, and says "not mapped" or "no data" where data is missing.
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+| Folder | Contents |
+|---|---|
+| `src/pages` | `Home` (landing), `MapPage` (the planner), `About`, `Emergency` |
+| `src/components` | Route form and search, comparison cards, details, map, legend, status |
+| `src/services/api.js` | The only place that talks to the backend |
+| `src/test`, `e2e/` | Shared fixtures; Playwright specs and helpers |

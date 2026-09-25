@@ -65,3 +65,7 @@ TRUST_PROXY = os.getenv("TRUST_PROXY", "false").lower() == "true"
 
 HOST = os.getenv("HOST", "127.0.0.1")
 PORT = _int("PORT", "8000")
+
+# When set to a folder containing the built frontend (frontend/dist),
+# the API also serves the web app, so one service hosts everything.
+STATIC_DIR = os.getenv("STATIC_DIR", "")

@@ -17,18 +17,15 @@ import os
 import sqlite3
 import sys
 import time
-import zlib
 from datetime import datetime, timezone
 
 import numpy as np
 import osmium
 
+from geodata.codec import cell_key, encode_nodes
 from geodata.coverage import parse_poly
 from geodata.schema import (
     ACTIVITY_KIND,
-    CELL_DEG,
-    CELL_ROW_SHIFT,
-    COORD_SCALE,
     DDL,
     EMERGENCY_KINDS,
     SCHEMA_VERSION,
@@ -45,24 +42,6 @@ ACTIVITY_AMENITIES = {
 }
 
 BATCH = 20_000
-
-
-def encode_nodes(coords):
-    """[lon, lat] rows -> zlib(int32 first point + deltas), compact and fast to decode."""
-
-    ints = np.rint(np.asarray(coords, dtype=float) * COORD_SCALE).astype("<i4")
-    deltas = ints.copy()
-    deltas[1:] -= ints[:-1]
-
-    return zlib.compress(deltas.tobytes(), 6)
-
-
-def decode_nodes(blob):
-    """Inverse of encode_nodes: an (n, 2) float array of lon, lat."""
-
-    deltas = np.frombuffer(zlib.decompress(blob), dtype="<i4").reshape(-1, 2)
-
-    return np.cumsum(deltas.astype(np.int64), axis=0) / COORD_SCALE
 
 
 def _poi_kind(tags):
@@ -93,14 +72,14 @@ def _area_center(area):
     return None
 
 
-def _insert_ways(connection, pbf):
+def _insert_ways(connection, pbf, node_index):
 
     rows, index_rows = [], []
     total = 0
 
     processor = (
         osmium.FileProcessor(pbf, osmium.osm.NODE | osmium.osm.WAY)
-        .with_locations()
+        .with_locations(node_index)
         .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY))
         .with_filter(osmium.filter.KeyFilter("highway"))
     )
@@ -215,23 +194,14 @@ def _insert_pois(connection, pbf):
     return counts
 
 
-def cell_key(lon, lat):
-    """Grid cell (as one integer) containing a point; works on numpy arrays too."""
-
-    column = np.floor(np.asarray(lon) / CELL_DEG).astype(np.int64) + (1 << 19)
-    row = np.floor(np.asarray(lat) / CELL_DEG).astype(np.int64) + (1 << 19)
-
-    return (row << CELL_ROW_SHIFT) | column
-
-
-def _insert_buildings(connection, pbf):
+def _insert_buildings(connection, pbf, node_index):
     """Counts buildings per grid cell, using one point of each footprint."""
 
     lons, lats = [], []
 
     processor = (
         osmium.FileProcessor(pbf, osmium.osm.NODE | osmium.osm.WAY)
-        .with_locations()
+        .with_locations(node_index)
         .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY))
         .with_filter(osmium.filter.KeyFilter("building"))
     )
@@ -259,7 +229,7 @@ def _insert_buildings(connection, pbf):
     return len(lons), len(keys)
 
 
-def build(pbf_path, poly_path, out_path, source_name="OpenStreetMap extract"):
+def build(pbf_path, poly_path, out_path, source_name="OpenStreetMap extract", node_index="flex_mem"):
 
     started = time.time()
 
@@ -283,7 +253,7 @@ def build(pbf_path, poly_path, out_path, source_name="OpenStreetMap extract"):
     connection.execute("PRAGMA synchronous = OFF")
 
     print("Reading roads...")
-    way_count = _insert_ways(connection, pbf_path)
+    way_count = _insert_ways(connection, pbf_path, node_index)
     connection.commit()
     print(f"  {way_count:,} ways")
 
@@ -293,7 +263,7 @@ def build(pbf_path, poly_path, out_path, source_name="OpenStreetMap extract"):
     print("  ", poi_counts)
 
     print("Counting buildings per grid cell...")
-    building_total, cell_total = _insert_buildings(connection, pbf_path)
+    building_total, cell_total = _insert_buildings(connection, pbf_path, node_index)
     connection.commit()
     print(f"  {building_total:,} buildings in {cell_total:,} cells")
 
@@ -328,9 +298,14 @@ def main(argv=None):
     parser.add_argument("--poly", required=True)
     parser.add_argument("--out", default="data/kerala_geo.sqlite")
     parser.add_argument("--source", default="OpenStreetMap extract (Kerala, India)")
+    parser.add_argument(
+        "--node-index", default="flex_mem",
+        help="pyosmium node location index; use sparse_file_array,/tmp/nodes.idx "
+             "on machines with little memory (slower, uses disk instead)",
+    )
     args = parser.parse_args(argv)
 
-    build(args.pbf, args.poly, args.out, args.source)
+    build(args.pbf, args.poly, args.out, args.source, args.node_index)
 
 
 if __name__ == "__main__":

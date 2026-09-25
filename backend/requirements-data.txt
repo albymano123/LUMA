@@ -1,0 +1,4 @@
+# Only needed to BUILD the local map database from an OpenStreetMap extract
+# (python -m geodata.build). Not needed to run the API.
+-r requirements.txt
+osmium==4.3.1

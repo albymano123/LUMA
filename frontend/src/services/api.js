@@ -1,8 +1,9 @@
 import axios from "axios";
 
-// Set VITE_API_URL in frontend/.env for other environments.
-const API_URL =
-  import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+// VITE_API_URL points at the API when it is hosted separately. Set it to an
+// empty string when the API also serves this app (same origin); when it is
+// not set at all, the local development API is used.
+const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000";
 
 const client = axios.create({
   baseURL: API_URL,

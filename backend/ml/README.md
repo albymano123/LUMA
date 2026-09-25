@@ -8,7 +8,7 @@ recommends routes.
 
 | Kind | Examples | Source |
 |---|---|---|
-| **Environment features** (inputs) | road class, sidewalks, speed limits, surface, junctions, dead ends, route twistiness, distance to hospitals/police | OpenStreetMap + routing geometry |
+| **Environment features** (inputs) | road class, sidewalks, speed limits, surface, lighting, junctions, dead ends, buildings nearby, route twistiness, distance to hospitals/police | OpenStreetMap + routing geometry |
 | **Safety labels** (ground truth) | recorded incidents/crimes at a location | **Not available yet.** Must be supplied. |
 
 Environment features describe a road. They do not say it is safe or
@@ -26,11 +26,12 @@ hand-made dataset and its model were removed for that reason.
    | `timestamp` | no | ISO date; lets the rate be per year |
    | `category`, `severity` | no | kept in the file, not used yet |
 
-2. Build the training table (real OSM roads, labelled with real incident counts):
+2. Build the training table (real roads from the local map database, labelled with real
+   incident counts; needs the database from `python -m geodata.build`):
 
    ```
    cd backend
-   venv/Scripts/python -m ml.build_dataset --incidents incidents.csv --bbox S,W,N,E --area "Kochi" --mode walking
+   venv/Scripts/python -m ml.build_dataset --incidents incidents.csv --bbox S,W,N,E --area "Kochi"
    ```
 
 3. Train:
@@ -45,4 +46,5 @@ baseline on held-out **areas** (spatial cross-validation). Only a
 validated model is ever shown, and its output is an expected incident
 rate per km for the training area, not a personal safety prediction.
 
-Restart the API after training so it picks up the model.
+Install the extra packages first: `pip install -r requirements-ml.txt`. Restart the API after
+training so it picks up the model. The model is trained and served for walking routes only.

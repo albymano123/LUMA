@@ -1,0 +1,13 @@
+.git
+**/node_modules
+**/venv
+**/__pycache__
+**/.pytest_cache
+frontend/dist
+frontend/test-results
+frontend/playwright-report
+backend/data
+backend/.env
+**/.env
+backend/ml/models
+*.pdf

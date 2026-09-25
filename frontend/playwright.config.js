@@ -10,16 +10,19 @@ export default defineConfig({
   fullyParallel: true,
   reporter: [["list"]],
   use: {
-    baseURL: "http://localhost:4173",
+    baseURL: process.env.BASE_URL || "http://localhost:4173",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  webServer: {
-    command: "npm run build && npm run preview -- --port 4173 --strictPort",
-    url: "http://localhost:4173",
-    reuseExistingServer: true,
-    timeout: 120_000,
-  },
+  // Testing an already running deployment (BASE_URL) needs no dev server.
+  webServer: process.env.BASE_URL
+    ? undefined
+    : {
+        command: "npm run build && npm run preview -- --port 4173 --strictPort",
+        url: "http://localhost:4173",
+        reuseExistingServer: true,
+        timeout: 120_000,
+      },
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"] } },
   ],

@@ -1,0 +1,6 @@
+# Only needed to TRAIN the experimental ML model on real incident data
+# (python -m ml.build_dataset / ml.train_model) and to serve a trained one.
+-r requirements.txt
+pandas==3.0.5
+scikit-learn==1.9.0
+joblib==1.5.3
