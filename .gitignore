@@ -19,6 +19,7 @@ backend/ml/training_windows.csv*
 backend/data/raw/
 backend/data/*.sqlite
 backend/data/*.sqlite-*
+backend/data/*.gz
 
 # MapLibre worker files copied from node_modules at dev/build time
 frontend/public/maplibre/

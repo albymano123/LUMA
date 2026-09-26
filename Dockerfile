@@ -3,8 +3,8 @@
 #   docker build -t lumapath .
 #   docker run -p 8000:8000 lumapath        ->  http://localhost:8000
 #
-# Three stages: build the web app, build the Kerala map database from
-# OpenStreetMap, then assemble a small runtime image with neither
+# Three stages: build the web app, build (or download) the Kerala map
+# database from OpenStreetMap, then assemble a small runtime image with neither
 # Node nor the (build-only) osmium tools in it.
 
 # ---------- 1. web app ----------
@@ -20,23 +20,25 @@ RUN npm run build
 # ---------- 2. map database ----------
 FROM python:3.13-slim AS data
 WORKDIR /build
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+# Only the CA certificates: downloads are done by geodata.fetch (retries,
+# size checks), not by curl.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates     && rm -rf /var/lib/apt/lists/*
 COPY backend/requirements.txt backend/requirements-data.txt ./
 RUN pip install --no-cache-dir -r requirements-data.txt
 COPY backend/ ./
-# Any OpenStreetMap extract + matching .poly boundary works; the defaults
-# are Kerala from openstreetmap.fr. Change them to cover another region.
+# Default: download the OpenStreetMap extract for Kerala (openstreetmap.fr)
+# and build the map database here. Any extract + matching .poly boundary works.
 ARG GEO_PBF_URL=https://download.openstreetmap.fr/extracts/asia/india/kerala.osm.pbf
 ARG GEO_POLY_URL=https://download.openstreetmap.fr/polygons/asia/india/kerala.poly
 ARG GEO_SOURCE="OpenStreetMap extract (Kerala, India)"
-# The node index lives on disk so the build fits in small (512 MB) builders.
-RUN curl -fsSL -o /tmp/region.osm.pbf "$GEO_PBF_URL" \
-    && curl -fsSL -o /tmp/region.poly "$GEO_POLY_URL" \
-    && python -m geodata.build --pbf /tmp/region.osm.pbf --poly /tmp/region.poly \
-         --out /out/geo.sqlite --source "$GEO_SOURCE" \
-         --node-index "sparse_file_array,/tmp/nodes.idx" \
-    && rm -f /tmp/region.osm.pbf /tmp/nodes.idx
+# Optional: URL of a database built earlier with `python -m geodata.build`
+# (a .sqlite or .sqlite.gz file). When set, nothing is built: the file is
+# downloaded and validated. Use it if the builder is too small or slow.
+ARG GEO_DB_URL=""
+# geodata.provision prints memory/disk, retries downloads, checks file sizes,
+# builds with a disk-based node index (fits small builders) and validates the
+# database, failing with a readable message instead of a bare exit code.
+RUN python -X faulthandler -m geodata.provision --out /out/geo.sqlite
 
 # ---------- 3. runtime ----------
 FROM python:3.13-slim

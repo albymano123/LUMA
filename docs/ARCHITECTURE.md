@@ -30,7 +30,7 @@ Typical total: **about 3 seconds** (it was about 25 s with live Overpass queries
 | `settings.py` | Configuration from environment variables |
 | `routing_service.py` | Route alternatives from OSRM |
 | `geo_context.py` | Chooses local database or live Overpass, returns one data shape |
-| `geodata/` | Local map database: `schema`, `build` (from a `.pbf`), `store` (queries), `coverage`, `codec` |
+| `geodata/` | Local map database: `schema`, `build` (from a `.pbf`), `store` (queries), `coverage`, `codec`; `fetch` and `provision` (retrying downloads and validated database for the Docker image) |
 | `overpass_provider.py` | Live fallback data source |
 | `road_tags.py`, `road_features.py` | OSM tag parsing and per-route road features (pure computation) |
 | `route_analyzer.py` | Measures routes and assembles the response |

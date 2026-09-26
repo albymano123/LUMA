@@ -12,11 +12,13 @@ The database is generated data: it is not committed to git.
 """
 
 import argparse
+import gc
 import json
 import os
 import sqlite3
 import sys
 import time
+from array import array
 from datetime import datetime, timezone
 
 import numpy as np
@@ -72,6 +74,34 @@ def _area_center(area):
     return None
 
 
+def _fresh_index(node_index):
+    """A node index spec that starts empty.
+
+    libosmium reopens an existing index file with its old entries, and the
+    next pass would append unsorted ids to it. So a file left by an earlier
+    pass is deleted; where the OS still holds it (Windows keeps memory-mapped
+    files locked) a new file name is used instead.
+    """
+
+    kind, _, path = node_index.partition(",")
+
+    if not path or not kind.endswith("_file_array") or not os.path.exists(path):
+        return node_index
+
+    gc.collect()
+
+    try:
+        os.remove(path)
+        return node_index
+    except OSError:
+        number = 1
+
+        while os.path.exists(f"{path}.{number}"):
+            number += 1
+
+        return f"{kind},{path}.{number}"
+
+
 def _insert_ways(connection, pbf, node_index):
 
     rows, index_rows = [], []
@@ -79,7 +109,7 @@ def _insert_ways(connection, pbf, node_index):
 
     processor = (
         osmium.FileProcessor(pbf, osmium.osm.NODE | osmium.osm.WAY)
-        .with_locations(node_index)
+        .with_locations(_fresh_index(node_index))
         .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY))
         .with_filter(osmium.filter.KeyFilter("highway"))
     )
@@ -200,11 +230,12 @@ def _insert_pois(connection, pbf):
 def _insert_buildings(connection, pbf, node_index):
     """Counts buildings per grid cell, using one point of each footprint."""
 
-    lons, lats = [], []
+    # Compact float buffers: millions of Python floats would cost ~10x the memory.
+    lons, lats = array("d"), array("d")
 
     processor = (
         osmium.FileProcessor(pbf, osmium.osm.NODE | osmium.osm.WAY)
-        .with_locations(node_index)
+        .with_locations(_fresh_index(node_index))
         .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY))
         .with_filter(osmium.filter.KeyFilter("building"))
     )
@@ -221,7 +252,7 @@ def _insert_buildings(connection, pbf, node_index):
         except osmium.InvalidLocationError:
             continue
 
-    keys, counts = np.unique(cell_key(lons, lats), return_counts=True)
+    keys, counts = np.unique(cell_key(np.frombuffer(lons, dtype=np.float64), np.frombuffer(lats, dtype=np.float64)), return_counts=True)
     counts = np.minimum(counts, 255)
 
     connection.executemany(
