@@ -60,6 +60,11 @@ data produced by the same code, never a substitute.
 If the build fails, open the log and find the `ERROR:` line printed by `geodata.provision`: it names
 the failing step (download, build, or validation) and, for the build, the exception.
 
+An `ImportError: lib....so.N: cannot open shared object file` instead means a compiled Python
+package (pyosmium, numpy, pydantic-core) needs a system shared library the `python:slim` base image
+does not ship; the fix is one `apt-get install` line for that library's Debian package (for example
+`libexpat1` for `libexpat.so.1`) in whichever stage the import happens.
+
 Free-tier limits: the service sleeps after about 15 minutes idle (the first request then takes
 30 to 60 seconds to wake it), and has 512 MB RAM. Open the URL a minute before a demo.
 

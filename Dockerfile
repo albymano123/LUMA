@@ -20,9 +20,18 @@ RUN npm run build
 # ---------- 2. map database ----------
 FROM python:3.13-slim AS data
 WORKDIR /build
-# Only the CA certificates: downloads are done by geodata.fetch (retries,
-# size checks), not by curl.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates     && rm -rf /var/lib/apt/lists/*
+# CA certificates for downloads (geodata.fetch, not curl), plus the runtime
+# shared libraries pyosmium's compiled extension links against dynamically
+# (libexpat, libstdc++, libgcc_s) - the slim base image does not ship them,
+# and pyosmium fails with ImportError: libexpat.so.1: cannot open shared
+# object file at `import osmium` without libexpat1 specifically. zlib and
+# glibc are already present (pip's own wheel installs depend on them).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libexpat1 \
+        libstdc++6 \
+        libgcc-s1 \
+    && rm -rf /var/lib/apt/lists/*
 COPY backend/requirements.txt backend/requirements-data.txt ./
 RUN pip install --no-cache-dir -r requirements-data.txt
 COPY backend/ ./
@@ -49,6 +58,15 @@ ENV PYTHONUNBUFFERED=1 \
     GEO_DB_PATH=/app/data/geo.sqlite \
     TRUST_PROXY=true \
     HOST=0.0.0.0
+
+# Runtime shared libraries for numpy and pydantic-core's compiled extensions
+# (libstdc++, libgcc_s) - not osmium, which is build-only and stays out of
+# this stage. Without these the image builds but crashes on first request
+# (ImportError at `import numpy` / `import pydantic_core`).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libstdc++6 \
+        libgcc-s1 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
