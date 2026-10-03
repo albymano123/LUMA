@@ -90,6 +90,12 @@ class RouteResult(BaseModel):
     highlights: list[Highlight] = []
     route_features: dict[str, Any] = Field(description="Environment facts from OpenStreetMap; not safety data")
     ml_estimate: dict[str, Any] = Field(description="Experimental; status 'not_trained' until real incident data exists")
+    ml_safety_model: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Experimental AI/ML analysis (ml/surrogate.py): a model trained to approximate the "
+        "rule-based score from real route/weather features, plus unsupervised outlier detection. "
+        "Additional, non-authoritative; status 'not_trained' until trained on real routes.",
+    )
 
 
 class Recommendation(BaseModel):

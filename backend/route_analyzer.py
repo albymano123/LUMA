@@ -23,6 +23,7 @@ import numpy as np
 from geo import distance_matrix_m, haversine_m, resample_line
 from geo_context import get_geo_context
 from ml.predict_model import estimate_for_route
+from ml.surrogate import analyze_route as ml_surrogate_analyze_route
 from road_features import road_network_features, route_shape_features
 from safety import calculate_safety_score, categorize_routes
 from settings import ACTIVITY_RADIUS_M, BUILT_UP_MIN_BUILDINGS, EMERGENCY_RADIUS_M
@@ -492,6 +493,20 @@ async def analyze_all_routes(routes, mode="walking", progress=None):
             mode,
         )
 
+        # Experimental AI/ML analysis: a model trained to approximate the
+        # rule-based score above from real route/weather features, plus
+        # unsupervised outlier detection (ml/surrogate.py). Additional and
+        # non-authoritative - it never changes the score or recommendation.
+        ml_safety_model = ml_surrogate_analyze_route(
+            route_features["route_shape"],
+            route_features["road_network"],
+            route_features["surroundings"],
+            route_features["emergency"],
+            weather,
+            mode,
+            rule_score=safety.get("safety_score"),
+        )
+
         # The detailed road measurements live in route_features.
         metrics.pop("road", None)
 
@@ -507,6 +522,7 @@ async def analyze_all_routes(routes, mode="walking", progress=None):
             "highlights": highlights,
             "route_features": route_features,
             "ml_estimate": ml_estimate,
+            "ml_safety_model": ml_safety_model,
         })
 
     recommendation = categorize_routes(analyzed)
