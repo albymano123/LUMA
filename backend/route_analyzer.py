@@ -23,6 +23,7 @@ import numpy as np
 from geo import distance_matrix_m, haversine_m, resample_line
 from geo_context import get_geo_context
 from ml.predict_model import estimate_for_route
+from ml.risk_model import assess_route as ml_risk_assess_route
 from ml.surrogate import analyze_route as ml_surrogate_analyze_route
 from road_features import road_network_features, route_shape_features
 from safety import calculate_safety_score, categorize_routes
@@ -480,6 +481,7 @@ async def analyze_all_routes(routes, mode="walking", progress=None):
         weather = _combine_weather([weather_readings[i] for i in indexes])
 
         safety = calculate_safety_score(metrics, weather, mode)
+        is_day = True if not weather else weather.get("is_day", True)
 
         services = metrics.pop("services")
         highlights = metrics.pop("highlights", [])
@@ -507,6 +509,17 @@ async def analyze_all_routes(routes, mode="walking", progress=None):
             rule_score=safety.get("safety_score"),
         )
 
+        # The real AI/ML contribution: a model trained on real UK STATS19
+        # pedestrian/cyclist collision data (ml/risk_model.py) estimates
+        # how severe casualties tend to be in conditions like this
+        # route's. Unlike ml_safety_model above, this DOES participate in
+        # ranking - boundedly, alongside the rule-based score - inside
+        # safety.categorize_routes; see its _ranking_score.
+        ml_risk_assessment = ml_risk_assess_route(
+            route_features["road_network"], route_features["surroundings"],
+            weather, is_day, mode,
+        )
+
         # The detailed road measurements live in route_features.
         metrics.pop("road", None)
 
@@ -523,6 +536,7 @@ async def analyze_all_routes(routes, mode="walking", progress=None):
             "route_features": route_features,
             "ml_estimate": ml_estimate,
             "ml_safety_model": ml_safety_model,
+            "ml_risk_assessment": ml_risk_assessment,
         })
 
     recommendation = categorize_routes(analyzed)

@@ -1,8 +1,19 @@
 """
-Rule-based, explainable safety scoring - the single source of truth.
+Rule-based, explainable safety scoring - the single source of truth
+for the numeric "safety_score" shown to the user, and for whether
+there is enough evidence to score a route at all (data_confidence).
 
 The frontend only displays what this module returns; it never
 calculates or adjusts a score.
+
+ROUTE RANKING (categorize_routes, below) is a related but separate
+question: which route gets tagged safest/balanced. It is still decided
+here, and the rule-based score is still its dominant input, but it is
+boundedly nudged by the AI/ML risk model (ml/risk_model.py) when one
+has been trained and validated on real collision data - see
+_ranking_score and ML_RANKING_WEIGHT. This is the one place AI/ML
+genuinely participates in route recommendation; it never participates
+in the displayed score itself.
 
 A route is scored on up to six factors, each 0-100, each built from
 real, mapped data and each measured as a share of the route's length
@@ -443,22 +454,70 @@ def _quickest(routes):
     return min(routes, key=lambda r: (r["duration_min"], r["distance_km"]))
 
 
+# How much the AI/ML risk model (ml/risk_model.py; trained on real UK
+# STATS19 pedestrian/cyclist collision data, since no Kerala-specific
+# incident dataset exists) may move the RANKING score away from the
+# rule-based score. The rule-based score itself ("safety_score", shown
+# to the user and used for data_confidence) is never changed by this;
+# it only affects which route categorize_routes tags safest/balanced.
+# Kept modest and named so the exact influence is auditable, and
+# reflects the model's own, honestly modest, validated predictive
+# power (ml/README.md, ml/risk_features.py).
+ML_RANKING_WEIGHT = 0.25
+
+
+def _ranking_score(route):
+    """
+    The rule-based score, nudged toward the AI/ML risk model's view
+    when a trained, validated model produced one ("ready") for this
+    route; otherwise exactly the rule-based score - identical ranking
+    behaviour to having no AI/ML risk model at all (the normal state
+    until ml.train_risk_model has been run; see ml/risk_model.py).
+    """
+
+    score = route.get("safety_score")
+
+    if score is None:
+        return None
+
+    ml = route.get("ml_risk_assessment") or {}
+
+    if ml.get("status") != "ready":
+        return score
+
+    # Higher predicted_severe_share -> lower ML-implied safety, on the
+    # same 0-100 scale as the rule-based score.
+    ml_equivalent = 100 * (1 - ml["predicted_severe_share"])
+
+    return (1 - ML_RANKING_WEIGHT) * score + ML_RANKING_WEIGHT * ml_equivalent
+
+
 def categorize_routes(routes):
     """
     Tags routes "safest", "balanced" and "fastest" (a route can hold
     several tags) and decides the recommendation. Deterministic:
 
-      fastest   the quickest route (ties: the higher score).
+      fastest   the quickest route (ties: the higher ranking score).
       safest    the quickest route among those within SCORE_TIE_MARGIN
-                points of the highest score.
+                points of the highest ranking score.
       balanced  the best mix of safety (50%), time (30%) and distance
                 (20%) among scored routes.
 
+    "Ranking score" is the rule-based score, boundedly adjusted by the
+    AI/ML risk model when one is trained and ready (_ranking_score);
+    the rule-based "safety_score" shown to the user is never itself
+    changed. This is the AI/ML model's one, deliberately bounded,
+    point of real influence on the product: which routes end up within
+    the tie margin of the top, and the mix behind "balanced".
+
     The recommendation is the safest route, but ONLY when that is
     defensible: some route must have a score, and the best score must
-    not rest on low-confidence data. Otherwise there is no
-    recommendation ("unavailable") and the quickest route is merely
-    the default selection, never labelled as a safety recommendation.
+    not rest on low-confidence rule-based data (AI/ML confidence is
+    not part of this gate - the rule-based engine remains the
+    authority on whether there is enough evidence at all). Otherwise
+    there is no recommendation ("unavailable") and the quickest route
+    is merely the default selection, never labelled as a safety
+    recommendation.
 
     Returns {"state", "route_id", "reason", "default_route_id"}:
       state  recommended | tie | close | single | unavailable
@@ -466,13 +525,14 @@ def categorize_routes(routes):
 
     for route in routes:
         route["categories"] = []
+        route["ranking_score"] = _ranking_score(route)
 
     if not routes:
         return {"state": "unavailable", "route_id": None, "reason": None, "default_route_id": None}
 
     fastest = min(
         routes,
-        key=lambda r: (r["duration_min"], -(r.get("safety_score") or 0), r["distance_km"]),
+        key=lambda r: (r["duration_min"], -(r["ranking_score"] or 0), r["distance_km"]),
     )
     fastest["categories"].append("fastest")
 
@@ -489,8 +549,8 @@ def categorize_routes(routes):
             "default_route_id": fastest["id"],
         }
 
-    top_score = max(r["safety_score"] for r in scored)
-    near_top = [r for r in scored if top_score - r["safety_score"] <= SCORE_TIE_MARGIN]
+    top_score = max(r["ranking_score"] for r in scored)
+    near_top = [r for r in scored if top_score - r["ranking_score"] <= SCORE_TIE_MARGIN]
     safest = _quickest(near_top)
     safest["categories"].append("safest")
 
@@ -499,7 +559,7 @@ def categorize_routes(routes):
 
     for route in scored:
         route["balance_score"] = round(
-            0.5 * route["safety_score"]
+            0.5 * route["ranking_score"]
             + 0.3 * 100 * min_duration / max(route["duration_min"], 0.1)
             + 0.2 * 100 * min_distance / max(route["distance_km"], 0.01),
             1,
@@ -531,8 +591,8 @@ def categorize_routes(routes):
             "default_route_id": safest["id"],
         }
 
-    best_other = max(r["safety_score"] for r in others)
-    gap = safest["safety_score"] - best_other
+    best_other = max(r["ranking_score"] for r in others)
+    gap = round(safest["ranking_score"] - best_other, 1)
 
     if gap <= SCORE_TIE_MARGIN and len(near_top) > 1:
         state = "tie"

@@ -79,6 +79,12 @@ class RouteResult(BaseModel):
     explanations: list[Explanation]
     categories: list[Literal["safest", "balanced", "fastest"]]
     balance_score: float | None = None
+    ranking_score: float | None = Field(
+        default=None,
+        description="The rule-based safety_score, boundedly adjusted by the AI/ML risk model when one is "
+        "trained and ready (safety.py's ML_RANKING_WEIGHT); equals safety_score otherwise. This, not "
+        "safety_score, is what decides the safest/balanced tags.",
+    )
 
     metrics: dict[str, Any]
     weather: dict[str, Any] | None = None
@@ -95,6 +101,14 @@ class RouteResult(BaseModel):
         description="Experimental AI/ML analysis (ml/surrogate.py): a model trained to approximate the "
         "rule-based score from real route/weather features, plus unsupervised outlier detection. "
         "Additional, non-authoritative; status 'not_trained' until trained on real routes.",
+    )
+    ml_risk_assessment: dict[str, Any] = Field(
+        default_factory=dict,
+        description="AI/ML risk model (ml/risk_model.py): trained on real UK STATS19 pedestrian/cyclist "
+        "collision data (no Kerala-specific dataset is publicly available) to predict how severe a "
+        "casualty tends to be in conditions like this route's. Walking/cycling only (status "
+        "'unsupported_mode' for driving). This DOES participate in ranking, boundedly - see "
+        "ranking_score - unlike ml_safety_model and ml_estimate. Status 'not_trained' until trained.",
     )
 
 
