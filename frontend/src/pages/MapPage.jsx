@@ -22,22 +22,29 @@ const PANEL_WIDTH = 408;
 
 const EMPTY_PROGRESS = {};
 
-function MissingDataNotice({ dataSources }) {
-  const missing = Object.entries(dataSources || {})
+export function MissingDataNotice({ dataSources }) {
+  const missingKeys = Object.entries(dataSources || {})
     .filter(([, available]) => !available)
-    .map(([key]) => DATA_SOURCE_LABELS[key] || key);
+    .map(([key]) => key);
 
-  if (!missing.length) return null;
+  // Weather is a live, external, non-blocking factor (safety.py treats it
+  // the same way: its absence alone no longer drops confidence to "low").
+  // Its own small, non-blocking status lives next to the confidence badge
+  // in RouteDetails instead of this page-level warning, which stays for
+  // genuinely critical gaps (road network, emergency services, buildings).
+  const blocking = missingKeys.filter((key) => key !== "weather");
+
+  if (!blocking.length) return null;
 
   return (
     <Notice tone="warning" icon={<AlertTriangle />} title="Some safety data is temporarily unavailable">
-      Couldn't load: {missing.join(", ")}. Scores use the data that was available and show lower confidence.
+      Couldn't load: {blocking.map((key) => DATA_SOURCE_LABELS[key] || key).join(", ")}. Scores use the data that was available and show lower confidence.
     </Notice>
   );
 }
 
 // Shown when no route can honestly be called the safest.
-function NoRecommendationNotice({ recommendation }) {
+export function NoRecommendationNotice({ recommendation }) {
   if (!recommendation || recommendation.state !== "unavailable") return null;
 
   return (

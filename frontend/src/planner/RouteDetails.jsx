@@ -27,6 +27,37 @@ const REASON_ICONS = {
   neutral: <Info size={16} color="var(--faint)" aria-label="Note" />,
 };
 
+// Compact, non-blocking status for the one factor that is allowed to be
+// temporarily unavailable without hiding a recommendation (safety.py's
+// confidence logic treats weather the same way): real status, real
+// confidence label, and an honest explanation - never a claim that the
+// route is guaranteed safe, never a fake weather reading.
+export function WeatherGapNote({ route }) {
+  if (route.weather != null || route.safety_score == null) return null;
+
+  const confidence = CONFIDENCE[route.data_confidence];
+  const mlConsidered = route.ml_risk_assessment?.status === "ready";
+
+  return (
+    <div className="rd__weathergap">
+      <div className="rd__weathergap-row">
+        <span>Weather</span>
+        <strong>Unavailable</strong>
+      </div>
+      {confidence && (
+        <div className="rd__weathergap-row">
+          <span>Recommendation confidence</span>
+          <strong>{confidence.label}</strong>
+        </div>
+      )}
+      <p className="muted-text">
+        Weather data was unavailable, so this recommendation is based on the other available road,
+        environmental{mlConsidered ? " and ML risk" : ""} factors.
+      </p>
+    </div>
+  );
+}
+
 // The plain-language reasons behind the score.
 function WhyThisRoute({ route }) {
   if (!route.explanations?.length) {
@@ -101,6 +132,8 @@ export default function RouteDetails({
           {route.via_roads?.length > 0 && <div className="rd__via">via {route.via_roads.join(", ")}</div>}
         </div>
       </header>
+
+      <WeatherGapNote route={route} />
 
       {route.safety_score == null && (
         <Notice tone="neutral" icon={<Info />} title="No safety score for this route">

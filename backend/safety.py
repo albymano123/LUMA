@@ -37,6 +37,14 @@ instead of pretending the value is zero. Tag-based factors (lighting,
 sidewalks, speed limits) are only used when enough of the route's
 streets carry the tag, because OpenStreetMap tagging is uneven.
 
+Weather is treated as OPTIONAL for confidence specifically (not for the
+score, which always honestly reflects whatever is actually available):
+a live weather-service outage alone does not drop confidence to "low"
+- and so does not block a recommendation, in categorize_routes - when
+every other (critical) factor this travel mode uses is present. A
+missing critical factor (emergency, activity, surroundings, lighting,
+road_safety) still lowers confidence exactly as before.
+
 The score describes conditions visible in open data. It is not a
 guarantee that a route is safe, and it is not built from crime or
 incident records (none are available).
@@ -426,12 +434,38 @@ def calculate_safety_score(metrics, weather, mode="walking"):
         if score is not None
     ) / available_weight
 
-    if available_weight >= 0.85:
+    # Confidence measures the CRITICAL, map-derived evidence only -
+    # emergency, activity, surroundings, lighting, road_safety - never
+    # weather. This is deliberate, not an oversight: weather is live,
+    # external, and genuinely can be temporarily unavailable (a service
+    # outage), and OpenStreetMap's own tagging is uneven enough (lighting
+    # especially) that real routes often have one critical factor thin
+    # alongside it. Gating the entire recommendation (categorize_routes)
+    # on the SAME "low" label for both cases would block a route whose
+    # road/geospatial evidence is actually solid, merely because today's
+    # weather reading also failed to load. Weather still fully counts in
+    # the SCORE above whenever a real reading exists - it is excluded
+    # only from this confidence measure, never faked when it does not.
+    critical_total_weight = sum(weights[key] for key in MAP_FACTORS)
+    critical_available_weight = sum(
+        weights[key] for key in MAP_FACTORS if results[key][0] is not None
+    )
+    critical_ratio = (critical_available_weight / critical_total_weight) if critical_total_weight else 0.0
+
+    if critical_ratio >= 0.85:
         confidence = "high"
-    elif available_weight >= 0.55:
+    elif critical_ratio >= 0.55:
         confidence = "medium"
     else:
         confidence = "low"
+
+    # Weather is real, useful safety information when it loads (rain,
+    # storms, visibility): its absence should not silently look like full
+    # confidence. A missing weather reading caps confidence at "medium" -
+    # still enough to be recommended, never "high" - without being able
+    # to lower an already-"low" critical-data result any further.
+    if results["weather"][0] is None and confidence == "high":
+        confidence = "medium"
 
     # Positives first, then neutral notes, then concerns.
     order = {"positive": 0, "neutral": 1, "negative": 2}

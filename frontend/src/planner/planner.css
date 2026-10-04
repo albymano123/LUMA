@@ -249,6 +249,23 @@
 .rd__risk { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; color: var(--tone-fg); }
 .rd__via { font-size: var(--fs-small); color: var(--muted); }
 
+/* Compact, non-blocking weather-gap status (replaces a page-level warning
+   when weather is the only unavailable factor - see MapPage.jsx). */
+.rd__weathergap {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  margin-top: var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--neutral-bg);
+  font-size: var(--fs-small);
+}
+.rd__weathergap-row { display: flex; justify-content: space-between; gap: var(--s-3); }
+.rd__weathergap-row span:first-child { color: var(--muted); }
+.rd__weathergap-row strong { color: var(--text); }
+.rd__weathergap p { margin: 2px 0 0; }
+
 .rd__stats {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

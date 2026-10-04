@@ -8,7 +8,7 @@ import BottomSheet from "./BottomSheet";
 import EmergencyList from "./EmergencyList";
 import { EnvironmentPanel, MlRiskStatus, MlStatus } from "./EnvironmentPanel";
 import PlaceSearch from "./PlaceSearch";
-import RouteDetails from "./RouteDetails";
+import RouteDetails, { WeatherGapNote } from "./RouteDetails";
 import RouteList from "./RouteList";
 import WeatherCard from "./WeatherCard";
 import { makeResponse, makeRoute } from "../test/fixtures";
@@ -215,6 +215,49 @@ describe("RouteDetails", () => {
     expect(screen.getByRole("img", { name: "Safety score 84 out of 100" })).toBeInTheDocument();
     expect(screen.getByText(/Good mapped availability of hospitals/)).toBeInTheDocument();
     expect(screen.getByText(/not mapped for most of this route/)).toBeInTheDocument();
+  });
+
+  it("shows no weather-gap note when weather data is present", () => {
+    renderDetails(); // the default fixture route has real weather data
+
+    expect(document.querySelector(".rd__weathergap")).not.toBeInTheDocument();
+  });
+
+  it("shows a compact, honest weather-gap note - not a fake reading - when weather is unavailable", () => {
+    renderDetails({ mutate: (data) => { data.routes[1].weather = null; data.routes[1].data_confidence = "medium"; } });
+
+    const note = document.querySelector(".rd__weathergap");
+    expect(note).toBeInTheDocument();
+
+    const scoped = within(note);
+    expect(scoped.getByText("Weather")).toBeInTheDocument();
+    expect(scoped.getByText("Unavailable")).toBeInTheDocument();
+    expect(scoped.getByText("Recommendation confidence")).toBeInTheDocument();
+    expect(scoped.getByText("Medium confidence")).toBeInTheDocument();
+    expect(scoped.getByText(/based on the other available road, environmental factors/)).toBeInTheDocument();
+
+    // The dedicated Weather section still honestly says it is unavailable
+    // too - this note does not replace or hide that, only adds context.
+    expect(screen.getByText(/Weather data is unavailable for this route right now/)).toBeInTheDocument();
+  });
+
+  it("mentions ML risk when it actually contributed, never when it did not", () => {
+    const withMl = makeRoute({ id: "route-2", weather: null, data_confidence: "medium", ml_risk_assessment: { status: "ready" } });
+    const { unmount } = render(<WeatherGapNote route={withMl} />);
+    expect(screen.getByText(/road, environmental and ML risk factors/)).toBeInTheDocument();
+    unmount();
+
+    const withoutMl = makeRoute({ id: "route-2", weather: null, data_confidence: "medium", ml_risk_assessment: { status: "not_trained" } });
+    render(<WeatherGapNote route={withoutMl} />);
+    expect(screen.getByText(/road, environmental factors/)).toBeInTheDocument();
+    expect(screen.queryByText(/ML risk/)).not.toBeInTheDocument();
+  });
+
+  it("stays silent for a route with no safety score (that case has its own notice)", () => {
+    const route = makeRoute({ safety_score: null, weather: null, data_confidence: "low" });
+    const { container } = render(<WeatherGapNote route={route} />);
+
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("offers Start navigation only when a handler is given (a source and destination are set)", async () => {

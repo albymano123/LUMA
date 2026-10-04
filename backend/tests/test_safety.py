@@ -146,6 +146,90 @@ def test_too_little_evidence_at_night_gives_no_score():
     assert result["risk_level"] == "Insufficient data"
 
 
+# ---------------- weather outage: optional for confidence, never faked ----------------
+#
+# Confidence is computed from the CRITICAL, map-derived factors only
+# (emergency, activity, surroundings, lighting, road_safety); weather is
+# excluded from that measure entirely, real as it is a live, external,
+# genuinely-can-be-temporarily-unavailable service. This is deliberately
+# NOT the same as deleting the check: (A) a genuinely thin critical
+# picture still produces "low" and still blocks a recommendation,
+# unchanged; (B) a weather outage, on a route with solid critical
+# evidence, no longer looks identical to (A) - and realistically, in
+# Kerala, one critical factor (lighting especially) is also often
+# thin at the same time a weather outage happens, which is exactly the
+# combination that used to wrongly read as "too little data" overall.
+# Weather still counts fully in the SCORE itself whenever a real
+# reading exists (never a guessed one) - only confidence excludes it.
+
+@pytest.mark.parametrize("mode", ["walking", "cycling", "driving"])
+def test_weather_outage_alone_is_scored_and_capped_at_medium_confidence(mode):
+    with_weather = calculate_safety_score(FULL_METRICS, CLEAR_DAY, mode)
+    without_weather = calculate_safety_score(FULL_METRICS, None, mode)
+
+    assert with_weather["data_confidence"] == "high"  # unchanged baseline
+
+    # Still scored, never "Insufficient data", for a weather outage alone
+    # when every critical factor this mode uses is present - but capped at
+    # "medium", not silently "high": weather is real information too.
+    assert without_weather["safety_score"] is not None
+    assert without_weather["risk_level"] != "Insufficient data"
+    assert without_weather["data_confidence"] == "medium"
+
+    # Honest, not fabricated: the weather factor itself is still reported
+    # as unavailable, never a guessed score.
+    weather_factor = factor(without_weather, "weather")
+    assert weather_factor["available"] is False
+    assert weather_factor["score"] is None
+
+    # The score differs only because weather's own real contribution is
+    # missing from the weighted average - nothing else changed.
+    assert without_weather["safety_score"] != with_weather["safety_score"]
+
+
+def test_weather_outage_plus_a_thin_critical_factor_still_gets_a_moderate_score():
+    # The realistic Kerala case this exists for: weather failed to load
+    # AND lighting is too sparsely tagged to trust (common for rural/
+    # semi-urban roads) - but emergency and surroundings, the two
+    # heaviest-weighted critical factors, are both present. That is
+    # genuinely enough evidence to recommend from, just not with full
+    # confidence.
+    metrics = {**FULL_METRICS, "lit_coverage": 0.05}
+
+    result = calculate_safety_score(metrics, None, "driving")
+
+    assert result["safety_score"] is not None
+    assert result["data_confidence"] == "medium"
+    assert factor(result, "lighting")["available"] is False
+    assert factor(result, "weather")["available"] is False
+
+
+def test_substantial_critical_data_loss_stays_low_confidence_regardless_of_weather():
+    # (A) two real critical factors gone (emergency and surroundings,
+    # the two heaviest for walking): must stay "low" and conservative,
+    # whether or not weather happens to be available - this is exactly
+    # the case the override must never touch.
+    metrics = {**FULL_METRICS, "hospital_access": None, "police_access": None, "built_up_share": None}
+
+    with_weather = calculate_safety_score(metrics, CLEAR_DAY, "walking")
+    without_weather = calculate_safety_score(metrics, None, "walking")
+
+    assert with_weather["data_confidence"] == "low"
+    assert without_weather["data_confidence"] == "low"
+
+
+def test_weather_present_with_a_thin_non_weather_factor_is_unaffected_by_this_change():
+    # Confirms this change is scoped to confidence specifically: a route
+    # with weather available but one minor critical factor thin behaves
+    # exactly as it always has (this combination never involves a missing
+    # weather reading, so the new logic has nothing to do here).
+    metrics = {**FULL_METRICS, "major_road_share": None, "sidewalk_coverage": 0.05, "maxspeed_coverage": 0.05}
+
+    result = calculate_safety_score(metrics, CLEAR_DAY, "walking")
+
+    assert result["data_confidence"] == "high"
+
+
 def test_sparsely_tagged_lighting_is_not_trusted():
     # 5 lit streets out of a route that is 95% untagged says nothing.
     metrics = {**FULL_METRICS, "lit_ratio": 1.0, "lit_coverage": 0.05}
@@ -326,6 +410,61 @@ def test_low_confidence_winner_is_not_recommended():
     assert result["state"] == "unavailable"
     assert result["route_id"] is None
     assert result["default_route_id"] == "a"
+
+
+def test_medium_confidence_from_a_weather_outage_still_gets_a_recommendation():
+    # End-to-end version of the safety.py-level fix: a route whose only
+    # gap is weather (data_confidence "medium", as calculate_safety_score
+    # now produces for that case) must be recommendable - this is the
+    # behaviour the earlier "No route is recommended" report was about.
+    routes = [route("a", 10, 1.0, 72, "medium"), route("b", 14, 1.2, 60, "medium")]
+
+    result = categorize_routes(routes)
+
+    assert result["state"] != "unavailable"
+    assert result["route_id"] == "a"
+
+
+def test_weather_gap_recommendation_still_uses_ml_ranking_normally():
+    # The weather/confidence fix and the AI/ML ranking blend
+    # (ML_RANKING_WEIGHT) are independent: a route recommended thanks to
+    # this fix still gets its ranking_score genuinely nudged by a ready
+    # ML risk assessment, exactly as it would with full weather data.
+    a = route("a", 10, 1.0, 80, "medium")
+    a["ml_risk_assessment"] = {"status": "ready", "predicted_severe_share": 0.9}  # confidently unsafe
+    b = route("b", 12, 1.1, 79, "medium")
+    b["ml_risk_assessment"] = {"status": "not_trained"}
+
+    result = categorize_routes([a, b])
+
+    assert result["state"] != "unavailable"
+    assert a["ranking_score"] < a["safety_score"]   # real score, really nudged down
+    assert b["ranking_score"] == b["safety_score"]  # untrained ML: unchanged, as always
+    assert result["route_id"] == "b"                # the nudge changed who wins
+
+
+def test_ml_unavailable_fallback_is_unaffected_by_the_weather_change():
+    routes = [route("a", 10, 1.0, 72, "medium"), route("b", 14, 1.2, 70, "medium")]
+    for r in routes:
+        r["ml_risk_assessment"] = {"status": "not_trained"}
+
+    result = categorize_routes(routes)
+
+    assert result["state"] != "unavailable"
+    assert routes[0]["ranking_score"] == routes[0]["safety_score"]
+    assert routes[1]["ranking_score"] == routes[1]["safety_score"]
+
+
+def test_rerouting_also_recommends_with_only_medium_confidence_available():
+    # Rerouting (useNavigation.js) calls the same getSafeRoute -> this
+    # same categorize_routes; nothing route-specific to rerouting needs
+    # its own logic for this to already work there too.
+    rerouted_candidates = [route("new-1", 8, 0.9, 80, "medium"), route("new-2", 11, 1.1, 65, "medium")]
+
+    result = categorize_routes(rerouted_candidates)
+
+    assert result["state"] != "unavailable"
+    assert result["route_id"] == "new-1"
 
 
 def test_recommendation_is_deterministic():
