@@ -16,7 +16,7 @@ import { CATEGORY_LABELS, RECOMMENDATION_LABELS, formatDistance, formatDuration 
 import { CONFIDENCE, riskInfo } from "../lib/risk";
 import { Badge, Button, Disclosure, FactorBar, Notice, ScoreRing, StatCard, Tip } from "../ui";
 import EmergencyList from "./EmergencyList";
-import { EnvironmentPanel, MlStatus } from "./EnvironmentPanel";
+import { EnvironmentPanel, MlRiskStatus } from "./EnvironmentPanel";
 import WeatherCard from "./WeatherCard";
 
 const EMERGENCY_RADIUS_KM = { walking: 2, cycling: 3, driving: 5 };
@@ -169,8 +169,8 @@ export default function RouteDetails({
         <EnvironmentPanel route={route} />
       </Disclosure>
 
-      <Disclosure title="Experimental ML estimate" icon={<FlaskConical size={18} aria-hidden="true" />}>
-        <MlStatus estimate={route.ml_estimate} />
+      <Disclosure title="ML risk assessment" icon={<FlaskConical size={18} aria-hidden="true" />}>
+        <MlRiskStatus route={route} />
       </Disclosure>
 
       <footer className="rd__foot">

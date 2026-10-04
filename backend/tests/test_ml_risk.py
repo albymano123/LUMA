@@ -11,6 +11,8 @@ convention - they test that the pipeline works, not a real-world
 accuracy claim.
 """
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -223,6 +225,60 @@ def test_not_trained_status_when_no_model_exists(monkeypatch, tmp_path):
 
     assert result["status"] == "not_trained"
     assert result["predicted_severe_share"] is None
+
+
+# ==================================================
+# checksum verification (ml/train_risk_model.py writes it, ml/risk_model.py checks it)
+# ==================================================
+
+def test_training_writes_a_real_matching_checksum(_trained_model_dir):
+    model_dir, metadata = _trained_model_dir
+
+    assert "model_sha256" in metadata
+    assert len(metadata["model_sha256"]) == 64  # a real sha256 hex digest
+
+    import hashlib
+
+    real_digest = hashlib.sha256((model_dir / "risk_model.joblib").read_bytes()).hexdigest()
+    assert metadata["model_sha256"] == real_digest
+    assert metadata["model_bytes"] == (model_dir / "risk_model.joblib").stat().st_size
+
+
+def test_a_corrupted_model_file_is_rejected_rather_than_loaded(monkeypatch, _trained_model_dir):
+    model_dir, _ = _trained_model_dir
+    _point_module_at(monkeypatch, model_dir)
+
+    # Simulate exactly what the checksum exists to catch: a truncated
+    # download or a bad copy, not a crafted attack.
+    with open(model_dir / "risk_model.joblib", "r+b") as file:
+        file.seek(0)
+        file.write(b"\x00" * 16)
+
+    result = risk_model.assess_route({"available": True}, {}, None, True, "walking")
+
+    assert result["status"] == "not_trained"  # refused, not a crash, not a silent bad prediction
+
+
+def test_a_model_with_no_recorded_checksum_still_loads(monkeypatch, _trained_model_dir):
+    # Older metadata (before this check existed) must not be bricked by it.
+    model_dir, _ = _trained_model_dir
+
+    with open(model_dir / "risk_model.json", encoding="utf8") as file:
+        metadata = json.load(file)
+
+    del metadata["model_sha256"]
+
+    with open(model_dir / "risk_model.json", "w", encoding="utf8") as file:
+        json.dump(metadata, file)
+
+    _point_module_at(monkeypatch, model_dir)
+
+    result = risk_model.assess_route(
+        {"available": True, "major_road_share": 0.1, "maxspeed_mean_kmh": 30, "junctions_per_km": 2, "lit_share": 0.8},
+        {"built_up_share": 0.5}, None, True, "walking",
+    )
+
+    assert result["status"] == "ready"
 
 
 def test_unsupported_mode_status_for_driving(monkeypatch, _trained_model_dir):

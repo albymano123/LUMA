@@ -12,8 +12,19 @@ __pycache__/
 node_modules/
 frontend/node_modules/
 
-# ML: trained models and generated tables are local artefacts
-backend/ml/models/
+# ML: trained models and generated tables are local artefacts.
+# backend/ml/models/* (not backend/ml/models/, a bare directory match) so
+# the !exceptions below actually take effect - git does not look inside a
+# directory matched by a plain directory pattern, exceptions or not.
+backend/ml/models/*
+# Exception: the real, trained, validated AI/ML risk model (ml/risk_model.py)
+# is small (~165 KB) and has no real public training dataset to rebuild it
+# from at deploy time (see ml/risk_features.py), so it is committed and
+# shipped in the Docker image rather than retrained on every build. Every
+# other model artifact in this directory (e.g. the rule-distillation
+# surrogate) stays untracked, built locally only.
+!backend/ml/models/risk_model.joblib
+!backend/ml/models/risk_model.json
 backend/ml/data/
 backend/ml/risk_training_table.csv
 backend/ml/route_training_table.csv*

@@ -21,6 +21,7 @@ _ranking_score, which falls back to the pure rule-based score whenever
 this module reports anything other than "ready".
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -73,6 +74,15 @@ def _load():
             logger.warning("Risk model was trained on different features; ignoring it")
             return None
 
+        expected_sha256 = metadata.get("model_sha256")
+
+        if expected_sha256 and not _checksum_matches(MODEL_PATH, expected_sha256):
+            logger.warning(
+                "Risk model file does not match its recorded checksum (corrupted or "
+                "mismatched artifact); ignoring it"
+            )
+            return None
+
         import joblib
 
         _loaded = (joblib.load(MODEL_PATH), metadata)
@@ -82,6 +92,21 @@ def _load():
         _loaded = None
 
     return _loaded
+
+
+def _checksum_matches(path, expected_sha256, chunk_size=1 << 20):
+    """True if `path`'s real SHA-256 matches the one recorded at training
+    time (risk_model.json's model_sha256) - catches a truncated download,
+    a bad Docker COPY, or an accidental overwrite, rather than silently
+    loading (or crashing on) a corrupted model file."""
+
+    digest = hashlib.sha256()
+
+    with open(path, "rb") as file:
+        for chunk in iter(lambda: file.read(chunk_size), b""):
+            digest.update(chunk)
+
+    return digest.hexdigest() == expected_sha256
 
 
 def _status(status, message, **extra):

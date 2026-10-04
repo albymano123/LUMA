@@ -68,11 +68,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgcc-s1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# requirements-ml.txt (-> requirements.txt + pandas/scikit-learn/joblib)
+# so the real, trained AI/ML risk model (ml/risk_model.py, shipped at
+# backend/ml/models/risk_model.joblib - see .gitignore/.dockerignore)
+# can actually be loaded. No extra system packages needed for any of the
+# three: their compiled extensions only link libstdc++/libgcc_s (already
+# installed above) and libc/libm (always present); scikit-learn's
+# OpenMP runtime is bundled inside its own wheel. Verified directly
+# against the real manylinux wheels' ELF dependencies, not assumed.
+COPY backend/requirements.txt backend/requirements-ml.txt ./
+RUN pip install --no-cache-dir -r requirements-ml.txt
 
 COPY backend/ ./
-RUN rm -rf tests data venv __pycache__ requirements-*.txt
+RUN rm -rf tests data venv __pycache__ requirements-*.txt ml/data ml/*.csv
 COPY --from=data /out/geo.sqlite /app/data/geo.sqlite
 COPY --from=web /web/dist /app/static
 

@@ -36,6 +36,7 @@ modest signal, not a strong one.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -227,7 +228,21 @@ def train(table, model_dir=MODEL_DIR):
     }
 
     os.makedirs(model_dir, exist_ok=True)
-    joblib.dump(model, os.path.join(model_dir, "risk_model.joblib"))
+    model_path = os.path.join(model_dir, "risk_model.joblib")
+    joblib.dump(model, model_path)
+
+    # A checksum of the artifact actually written, so risk_model.py can
+    # detect a truncated download, a bad COPY, or an accidental overwrite
+    # at load time instead of silently loading (or crashing on) a
+    # corrupted file.
+    digest = hashlib.sha256()
+
+    with open(model_path, "rb") as file:
+        for chunk in iter(lambda: file.read(1 << 20), b""):
+            digest.update(chunk)
+
+    metadata["model_sha256"] = digest.hexdigest()
+    metadata["model_bytes"] = os.path.getsize(model_path)
 
     with open(os.path.join(model_dir, "risk_model.json"), "w", encoding="utf8") as file:
         json.dump(metadata, file, indent=2)

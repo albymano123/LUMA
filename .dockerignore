@@ -9,5 +9,15 @@ frontend/playwright-report
 backend/data
 backend/.env
 **/.env
-backend/ml/models
+# backend/ml/models/* (not backend/ml/models, a bare directory match) so the
+# !exceptions below actually take effect - Docker does not look inside a
+# directory matched by a plain directory pattern. The trained risk model
+# (ml/risk_model.py) is the one artifact that ships; everything else that
+# could land in this directory (e.g. the rule-distillation surrogate) stays
+# out of the image.
+backend/ml/models/*
+!backend/ml/models/risk_model.joblib
+!backend/ml/models/risk_model.json
+backend/ml/data
+backend/ml/*.csv
 *.pdf

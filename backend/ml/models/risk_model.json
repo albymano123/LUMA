@@ -1,0 +1,162 @@
+{
+  "trained_at": "2026-10-03T14:35:24.367605+00:00",
+  "feature_columns": [
+    "major_road",
+    "speed_limit_kmh",
+    "at_junction",
+    "daylight",
+    "dark_lit",
+    "dark_unlit",
+    "raining",
+    "snowing",
+    "high_wind",
+    "fog_or_poor_visibility",
+    "urban",
+    "is_cyclist",
+    "hour_sin",
+    "hour_cos",
+    "is_weekend"
+  ],
+  "target": "severe (real STATS19 casualty_severity for a real pedestrian/cyclist casualty: Fatal/Serious=1, Slight=0)",
+  "data_source": "UK DfT STATS19 road collision data, Open Government Licence v3.0 (data.dft.gov.uk) - no India/Kerala-specific collision dataset is publicly available; see ml/risk_features.py.",
+  "training_year": 2023,
+  "test_year": 2024,
+  "training_rows": 33076,
+  "test_rows": 31239,
+  "training_districts": 351,
+  "test_metrics": {
+    "roc_auc": 0.5934,
+    "average_precision": 0.3811,
+    "precision": 0.3558,
+    "recall": 0.4829,
+    "f1": 0.4097,
+    "positive_rate_actual": 0.2886,
+    "positive_rate_predicted": 0.3917,
+    "n": 31239
+  },
+  "baseline_majority_class_metrics": {
+    "roc_auc": 0.5,
+    "average_precision": 0.2886,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "positive_rate_actual": 0.2886,
+    "positive_rate_predicted": 0.0,
+    "n": 31239
+  },
+  "baseline_logistic_regression_metrics": {
+    "roc_auc": 0.5823,
+    "average_precision": 0.3758,
+    "precision": 0.3436,
+    "recall": 0.4956,
+    "f1": 0.4058,
+    "positive_rate_actual": 0.2886,
+    "positive_rate_predicted": 0.4164,
+    "n": 31239
+  },
+  "spatial_cross_validation": {
+    "folds": 5,
+    "risk_model_roc_auc_mean": 0.5976,
+    "logistic_baseline_roc_auc_mean": 0.5853
+  },
+  "roc_auc_improvement_over_logistic_baseline": 0.0111,
+  "bootstrap_confidence_auc_above_chance": 1.0,
+  "bootstrap_samples": 1000,
+  "validated": true,
+  "feature_importance_permutation": [
+    {
+      "feature": "is_cyclist",
+      "importance_mean": 0.03619,
+      "importance_std": 0.00286
+    },
+    {
+      "feature": "daylight",
+      "importance_mean": 0.01541,
+      "importance_std": 0.00127
+    },
+    {
+      "feature": "speed_limit_kmh",
+      "importance_mean": 0.01529,
+      "importance_std": 0.00148
+    },
+    {
+      "feature": "urban",
+      "importance_mean": 0.00768,
+      "importance_std": 0.00108
+    },
+    {
+      "feature": "hour_cos",
+      "importance_mean": 0.0076,
+      "importance_std": 0.00082
+    },
+    {
+      "feature": "hour_sin",
+      "importance_mean": 0.00586,
+      "importance_std": 0.00069
+    },
+    {
+      "feature": "major_road",
+      "importance_mean": 0.00378,
+      "importance_std": 0.00042
+    },
+    {
+      "feature": "is_weekend",
+      "importance_mean": 0.00295,
+      "importance_std": 0.00104
+    },
+    {
+      "feature": "raining",
+      "importance_mean": 0.00079,
+      "importance_std": 0.00028
+    },
+    {
+      "feature": "at_junction",
+      "importance_mean": 0.0002,
+      "importance_std": 0.00017
+    },
+    {
+      "feature": "high_wind",
+      "importance_mean": 8e-05,
+      "importance_std": 0.00043
+    },
+    {
+      "feature": "dark_unlit",
+      "importance_mean": 5e-05,
+      "importance_std": 0.00026
+    },
+    {
+      "feature": "snowing",
+      "importance_mean": 0.0,
+      "importance_std": 0.0
+    },
+    {
+      "feature": "fog_or_poor_visibility",
+      "importance_mean": 0.0,
+      "importance_std": 0.0
+    },
+    {
+      "feature": "dark_lit",
+      "importance_mean": -3e-05,
+      "importance_std": 8e-05
+    }
+  ],
+  "feature_medians": {
+    "major_road": 0.0,
+    "speed_limit_kmh": 48.2802,
+    "at_junction": 1.0,
+    "daylight": 1.0,
+    "dark_lit": 0.0,
+    "dark_unlit": 0.0,
+    "raining": 0.0,
+    "snowing": 0.0,
+    "high_wind": 0.0,
+    "fog_or_poor_visibility": 0.0,
+    "urban": 1.0,
+    "is_cyclist": 0.0,
+    "hour_sin": -0.5,
+    "hour_cos": -0.5,
+    "is_weekend": 0.0
+  },
+  "model_sha256": "f85b01b64c7aa743b44568b2f5d307c99f99d26efb9aa5afa34acca308957301",
+  "model_bytes": 165696
+}

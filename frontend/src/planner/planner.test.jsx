@@ -6,7 +6,7 @@ import { ToastProvider } from "../ui";
 import AnalysisProgress from "./AnalysisProgress";
 import BottomSheet from "./BottomSheet";
 import EmergencyList from "./EmergencyList";
-import { EnvironmentPanel, MlStatus } from "./EnvironmentPanel";
+import { EnvironmentPanel, MlRiskStatus, MlStatus } from "./EnvironmentPanel";
 import PlaceSearch from "./PlaceSearch";
 import RouteDetails from "./RouteDetails";
 import RouteList from "./RouteList";
@@ -423,6 +423,74 @@ describe("EnvironmentPanel and ML status", () => {
     );
 
     expect(screen.getByText(/About 1.4 recorded incidents per km/)).toBeInTheDocument();
+  });
+});
+
+
+// ==================== ML risk assessment (the current AI/ML system) ====================
+
+describe("MlRiskStatus", () => {
+  it("explains the current not_trained/unavailable reasons honestly, without a generic message", () => {
+    const route = makeRoute({ ml_risk_assessment: { status: "not_trained", predicted_severe_share: null, risk_label: null, top_factors: [] } });
+    render(<MlRiskStatus route={route} />);
+
+    expect(screen.getByText(/No AI\/ML risk model is available yet/)).toBeInTheDocument();
+  });
+
+  it("explains unsupported_mode for driving routes specifically", () => {
+    const route = makeRoute({ ml_risk_assessment: { status: "unsupported_mode", predicted_severe_share: null, risk_label: null, top_factors: [] } });
+    render(<MlRiskStatus route={route} />);
+
+    expect(screen.getByText(/pedestrian and cyclist records/)).toBeInTheDocument();
+  });
+
+  it("shows the risk label, percentage, top factors and ranking contribution when ready", () => {
+    const route = makeRoute({
+      safety_score: 80,
+      ranking_score: 74.6,
+      ml_risk_assessment: {
+        status: "ready",
+        predicted_severe_share: 0.42,
+        risk_label: "Moderate relative risk",
+        top_factors: [
+          { feature: "speed_limit_kmh", effect: -0.06, direction: "decreased" },
+          { feature: "is_cyclist", effect: 0.04, direction: "increased" },
+        ],
+      },
+    });
+
+    render(<MlRiskStatus route={route} />);
+
+    expect(screen.getByText(/Moderate relative risk/)).toBeInTheDocument();
+    expect(screen.getByText(/42%/)).toBeInTheDocument();
+    expect(screen.getByText(/the speed limit/)).toBeInTheDocument();
+    expect(screen.getByText(/travelling by bicycle/)).toBeInTheDocument();
+    expect(screen.getByText(/rule-based score of 80 became a ranking score of 75/)).toBeInTheDocument();
+  });
+
+  it("says plainly when the model agreed and did not move the ranking", () => {
+    const route = makeRoute({
+      safety_score: 80,
+      ranking_score: 80,
+      ml_risk_assessment: { status: "ready", predicted_severe_share: 0.2, risk_label: "Lower relative risk", top_factors: [] },
+    });
+
+    render(<MlRiskStatus route={route} />);
+
+    expect(screen.getByText(/did not move it/)).toBeInTheDocument();
+  });
+
+  it("never claims to predict an individual accident or guarantee safety", () => {
+    const route = makeRoute({
+      ml_risk_assessment: { status: "ready", predicted_severe_share: 0.5, risk_label: "Moderate relative risk", top_factors: [] },
+    });
+
+    render(<MlRiskStatus route={route} />);
+
+    // The only mention of "will occur" is inside the honest negation below,
+    // never a standalone claim that an accident will happen.
+    expect(screen.getByText(/not a prediction that a collision will occur/)).toBeInTheDocument();
+    expect(screen.getByText(/not a promise that this route is safe/)).toBeInTheDocument();
   });
 });
 

@@ -31,6 +31,7 @@ export function makeRoute(overrides = {}) {
     via_roads: ["Main Road"],
     generated_via_point: false,
     safety_score: 78,
+    ranking_score: 78,
     risk_level: "Lower risk",
     data_confidence: "high",
     factors: FACTORS,
@@ -73,6 +74,14 @@ export function makeRoute(overrides = {}) {
       message: "No model has been trained. This needs a real incident or crime dataset, which has not been provided yet.",
       expected_incidents_per_km: null,
       relative_to_area_average: null,
+    },
+    ml_safety_model: { status: "not_trained", message: "No AI/ML model has been trained yet.", predicted_safety_score: null, agrees_with_rule_score: null, unusual_route: null },
+    ml_risk_assessment: {
+      status: "not_trained",
+      message: "No AI/ML risk model has been trained yet. Train one with ml.risk_dataset and ml.train_risk_model.",
+      predicted_severe_share: null,
+      risk_label: null,
+      top_factors: [],
     },
     ...overrides,
   };
