@@ -72,6 +72,36 @@
   box-shadow: 0 6px 16px rgba(10, 18, 38, 0.3), 0 0 0 6px rgba(47, 107, 255, 0.18);
 }
 
+/* Live navigation position puck: a solid dot, a soft breathing ring, and
+   (when the device reports a heading) a cone pointing the way of travel. */
+.lp-puck { background: none; border: 0; z-index: 1200 !important; }
+.lp-puck__dot {
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: #2f6bff;
+  border: 2.5px solid #fff;
+  box-shadow: 0 2px 8px rgba(10, 18, 38, 0.35);
+}
+.lp-puck__ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(47, 107, 255, 0.35);
+  animation: lp-pulse-ring 2.2s ease-out infinite;
+}
+.lp-puck__cone {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 0;
+  height: 0;
+  border-left: 9px solid transparent;
+  border-right: 9px solid transparent;
+  border-bottom: 20px solid rgba(47, 107, 255, 0.55);
+  transform-origin: 50% 100%;
+}
+
 /* ============================ routes ============================ */
 
 .lp-route { transition: stroke-width 160ms, stroke-opacity 160ms; }

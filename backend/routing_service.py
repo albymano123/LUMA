@@ -133,6 +133,39 @@ async def _request_osrm(client, mode, waypoints, alternatives):
 # FORMAT ONE ROUTE
 # ==================================================
 
+def _steps(osrm_route):
+    """
+    Turn-by-turn maneuvers, flattened across every leg in order (a route
+    with via-points has more than one leg). OSRM already computes this
+    (requested with steps=true in _request_osrm); only the fields the
+    frontend's maneuver-to-text mapping actually needs are kept, since
+    each step's own intersection/geometry detail is not needed once the
+    route's own overall geometry is already in the response.
+
+    A step with no mapped road name is kept with name="" rather than
+    dropped: "Turn left" is still real information even when the road
+    it turns onto is unnamed in OpenStreetMap.
+    """
+
+    steps = []
+
+    for leg in osrm_route.get("legs", []):
+        for step in leg.get("steps", []):
+
+            maneuver = step.get("maneuver") or {}
+            location = maneuver.get("location")
+
+            steps.append({
+                "type": maneuver.get("type", "turn"),
+                "modifier": maneuver.get("modifier"),
+                "name": (step.get("name") or "").strip(),
+                "distance_m": round(step.get("distance", 0.0)),
+                "location": [location[0], location[1]] if location else None,
+            })
+
+    return steps
+
+
 def _format_route(osrm_route, via=None):
 
     summaries = [
@@ -154,6 +187,7 @@ def _format_route(osrm_route, via=None):
         "geometry": osrm_route["geometry"],
         "via_roads": road_names[:2],
         "generated_via_point": via is not None,
+        "steps": _steps(osrm_route),
     }
 
 

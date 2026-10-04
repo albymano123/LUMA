@@ -203,3 +203,86 @@ def test_via_points_sit_on_both_sides_of_the_direct_line():
         sides.add(cross > 0)
 
     assert sides == {True, False}
+
+
+# ==================================================
+# TURN-BY-TURN STEPS (for navigation mode)
+# ==================================================
+
+def osrm_leg_steps():
+    """A real-shaped (if fictional) OSRM steps list, matching the exact
+    fields observed from a live OSRM request (maneuver.type/modifier,
+    name, distance, geometry) - everything _steps() needs is present,
+    plus extra fields (intersections) it should ignore."""
+
+    return [
+        {
+            "distance": 120.4, "duration": 90.0, "name": "",
+            "maneuver": {"type": "depart", "modifier": "right", "location": [76.28, 9.93], "bearing_before": 0, "bearing_after": 90},
+            "intersections": [{"location": [76.28, 9.93], "bearings": [90]}],
+        },
+        {
+            "distance": 340.0, "duration": 250.0, "name": "Pandit Karuppan Road",
+            "maneuver": {"type": "turn", "modifier": "left", "location": [76.282, 9.931]},
+        },
+        {
+            "distance": 0.0, "duration": 0.0, "name": "",
+            "maneuver": {"type": "arrive", "modifier": None, "location": [76.29, 9.94]},
+        },
+    ]
+
+
+def osrm_route_with_steps(points):
+    route = osrm_route(points)
+    route["legs"] = [{"summary": "Pandit Karuppan Road", "steps": osrm_leg_steps()}]
+    return route
+
+
+def test_steps_are_extracted_with_the_fields_navigation_needs(monkeypatch):
+    install(monkeypatch, lambda _m, w, _a: [osrm_route_with_steps(DIRECT)] if len(w) == 2 else [])
+
+    steps = get()[0]["steps"]
+
+    assert [s["type"] for s in steps] == ["depart", "turn", "arrive"]
+    assert steps[0]["modifier"] == "right"
+    assert steps[1]["modifier"] == "left"
+    assert steps[1]["name"] == "Pandit Karuppan Road"
+    assert steps[1]["distance_m"] == 340
+    assert steps[1]["location"] == [76.282, 9.931]
+    # Fields navigation does not need (e.g. intersections) are dropped.
+    assert "intersections" not in steps[0]
+    assert "bearing_before" not in steps[0]
+
+
+def test_an_unnamed_step_keeps_an_empty_name_rather_than_being_dropped(monkeypatch):
+    install(monkeypatch, lambda _m, w, _a: [osrm_route_with_steps(DIRECT)] if len(w) == 2 else [])
+
+    steps = get()[0]["steps"]
+
+    assert steps[0]["name"] == ""
+    assert len(steps) == 3  # the unnamed depart step is still present
+
+
+def test_a_route_with_no_steps_field_gets_an_empty_list_not_an_error(monkeypatch):
+    # osrm_route() (no steps key in its legs) is what every other test in
+    # this file already uses; steps must default to [] for them, not raise.
+    install(monkeypatch, lambda _m, w, _a: [osrm_route(DIRECT)] if len(w) == 2 else [])
+
+    assert get()[0]["steps"] == []
+
+
+def test_steps_from_every_leg_of_a_via_route_are_flattened_in_order(monkeypatch):
+
+    def multi_leg_route(points):
+        route = osrm_route(points)
+        route["legs"] = [
+            {"summary": "First Road", "steps": [osrm_leg_steps()[0]]},
+            {"summary": "Second Road", "steps": [osrm_leg_steps()[1], osrm_leg_steps()[2]]},
+        ]
+        return route
+
+    install(monkeypatch, lambda _m, w, _a: [multi_leg_route(DIRECT)] if len(w) == 2 else [])
+
+    steps = get()[0]["steps"]
+
+    assert [s["type"] for s in steps] == ["depart", "turn", "arrive"]

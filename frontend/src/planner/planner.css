@@ -389,3 +389,102 @@
 /* Phones: keep the map's zoom buttons and attribution above the sheet's
    peek line, where they stay visible and never sit on top of the results. */
 .planner[data-phone="true"] .leaflet-bottom { bottom: 156px; }
+
+
+/* ============================ navigation mode ============================ */
+
+.nav { position: relative; height: 100%; display: flex; flex-direction: column; }
+
+.nav__top {
+  position: relative;
+  z-index: 20;
+  padding: 14px var(--s-5);
+  border-radius: 0;
+  border-bottom: 1px solid var(--line);
+}
+.nav__instruction { display: flex; align-items: center; gap: var(--s-3); min-height: 30px; }
+.nav__instruction > svg { flex-shrink: 0; color: var(--blue-600); }
+.nav__instruction-text { font-weight: 700; font-size: var(--fs-h4); color: var(--text); flex: 1; }
+.nav__instruction-dist { font-size: var(--fs-body); color: var(--muted); white-space: nowrap; }
+
+.nav__map { position: relative; flex: 1; min-height: 0; }
+.nav__map .lp-map { height: 100%; width: 100%; }
+
+.nav__banners {
+  position: absolute;
+  top: var(--s-4);
+  left: var(--s-4);
+  right: var(--s-4);
+  z-index: 20;
+  display: grid;
+  gap: var(--s-3);
+  pointer-events: none;
+}
+.nav__banners .lp-notice { pointer-events: auto; max-width: 480px; margin-inline: auto; }
+
+.nav__recenter {
+  position: absolute;
+  right: var(--s-4);
+  bottom: var(--s-4);
+  z-index: 20;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(10, 18, 38, 0.22);
+}
+
+.nav__bottom {
+  position: relative;
+  z-index: 20;
+  padding: var(--s-4) var(--s-5) calc(var(--s-4) + env(safe-area-inset-bottom));
+  border-radius: 0;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: var(--s-3);
+}
+
+.nav__stats { display: flex; justify-content: space-between; gap: var(--s-4); }
+.nav__stat { display: flex; flex-direction: column; gap: 2px; }
+.nav__stat-value { font-family: var(--font-display); font-size: var(--fs-h3); font-weight: 800; color: var(--text); }
+.nav__stat-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+
+.nav__progress { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.nav__progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--blue-500), var(--blue-600));
+  transition: width var(--dur-3) var(--ease-out);
+}
+
+.nav__footer { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
+.nav__safety { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-small); font-weight: 600; color: var(--tone-fg); }
+.nav__gps { color: var(--faint); font-weight: 500; }
+
+.nav__arrival {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: var(--s-5);
+  background: rgba(8, 18, 38, 0.38);
+  backdrop-filter: blur(2px);
+}
+.nav__arrival-card {
+  display: grid;
+  justify-items: center;
+  gap: var(--s-3);
+  max-width: 360px;
+  padding: var(--s-8) var(--s-6);
+  border-radius: var(--r-2xl);
+  text-align: center;
+  background: #fff;
+}
+.nav__arrival-card > svg { color: var(--green-600); }
+.nav__arrival-card h2 { font-size: var(--fs-h3); margin: 0; }
+.nav__arrival-card p { color: var(--muted); margin: 0; font-size: var(--fs-body); }
+.nav__arrival-actions { display: flex; gap: var(--s-3); margin-top: var(--s-2); }
+
+/* Phones: a touch-friendly, denser layout. */
+.nav[data-phone="true"] .nav__top { padding: 12px var(--s-4); }
+.nav[data-phone="true"] .nav__bottom { padding: var(--s-3) var(--s-4) calc(var(--s-3) + env(safe-area-inset-bottom)); }
+.nav[data-phone="true"] .nav__stat-value { font-size: var(--fs-h4); }
+.nav[data-phone="true"] .leaflet-bottom { bottom: 118px; }

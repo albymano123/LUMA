@@ -4,7 +4,7 @@ import { MapContainer, Marker, Polyline, Popup, Tooltip, useMap } from "react-le
 import L, { clusterReady } from "./leaflet";
 import BaseLayer from "./BaseLayer";
 import { routeColors } from "./colors";
-import { clusterIcon, endpointIcons, serviceIcon, servicePopup } from "./markers";
+import { clusterIcon, endpointIcons, liveLocationIcon, serviceIcon, servicePopup } from "./markers";
 import { formatDistance, formatDuration } from "../lib/format";
 import { riskInfo } from "../lib/risk";
 
@@ -297,6 +297,57 @@ function ZoomControl() {
 
 
 // ==================================================
+// LIVE NAVIGATION: position puck + follow mode
+// ==================================================
+
+// Keeps the map centred on a live GPS fix while `follow` is true, without
+// fighting the user: any real (non-programmatic) drag turns follow off
+// via onUserPanned, and `recenterSignal` (a value that changes each time
+// the "Re-center" button is pressed) forces one more pan even while
+// follow is off, independent of whether it is then turned back on.
+function FollowLocation({ liveLocation, follow, onUserPanned, recenterSignal }) {
+  const map = useMap();
+  const lastSignal = useRef(recenterSignal);
+
+  useEffect(() => {
+    const onDragStart = () => onUserPanned?.();
+    map.on("dragstart", onDragStart);
+    return () => map.off("dragstart", onDragStart);
+  }, [map, onUserPanned]);
+
+  useEffect(() => {
+    if (!liveLocation) return;
+
+    const recenterRequested = recenterSignal !== lastSignal.current;
+    lastSignal.current = recenterSignal;
+
+    if (!follow && !recenterRequested) return;
+
+    map.flyTo([liveLocation.lat, liveLocation.lon], Math.max(map.getZoom(), 17), { duration: 0.5 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, liveLocation?.lat, liveLocation?.lon, follow, recenterSignal]);
+
+  return null;
+}
+
+function LiveLocationMarker({ liveLocation }) {
+  const icon = useMemo(() => liveLocationIcon(liveLocation?.heading), [liveLocation?.heading]);
+
+  if (!liveLocation) return null;
+
+  return (
+    <Marker
+      position={[liveLocation.lat, liveLocation.lon]}
+      icon={icon}
+      zIndexOffset={2000}
+      interactive={false}
+      keyboard={false}
+    />
+  );
+}
+
+
+// ==================================================
 // MAIN MAP
 // ==================================================
 
@@ -311,6 +362,11 @@ export default function MapView({
   layers,
   loading,
   padding,
+  // ---- live navigation (all optional; the planner view never sets these) ----
+  liveLocation, // {lat, lon, heading} | null
+  followLocation = false,
+  onUserPanned,
+  recenterSignal,
 }) {
   const selected = routes?.find((route) => route.id === selectedRouteId);
 
@@ -339,6 +395,14 @@ export default function MapView({
 
       <ZoomControl />
       <FitView source={source} destination={destination} routes={routes} padding={padding} />
+      {liveLocation && (
+        <FollowLocation
+          liveLocation={liveLocation}
+          follow={followLocation}
+          onUserPanned={onUserPanned}
+          recenterSignal={recenterSignal}
+        />
+      )}
 
       {loading && source && destination && <ScanLine source={source} destination={destination} />}
 
@@ -367,6 +431,8 @@ export default function MapView({
           <Popup><strong>Destination</strong><br />{destination.name}</Popup>
         </Marker>
       )}
+
+      <LiveLocationMarker liveLocation={liveLocation} />
     </MapContainer>
   );
 }

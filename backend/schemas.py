@@ -62,6 +62,17 @@ class Geometry(BaseModel):
     coordinates: list[list[float]] = Field(description="[longitude, latitude] pairs")
 
 
+class RouteStep(BaseModel):
+    """One real OSRM maneuver (turn-by-turn navigation uses these to show
+    instructions; never invented, only OSRM's own computed steps)."""
+
+    type: str = Field(description="OSRM maneuver type, e.g. 'depart', 'turn', 'new name', 'arrive'")
+    modifier: str | None = Field(default=None, description="e.g. 'left', 'slight right', 'uturn'")
+    name: str = Field(description="the road this step is on, or '' when unmapped")
+    distance_m: float = Field(description="length of this step")
+    location: list[float] | None = Field(default=None, description="[longitude, latitude] of the maneuver")
+
+
 class RouteResult(BaseModel):
     id: str
     name: str
@@ -71,6 +82,7 @@ class RouteResult(BaseModel):
     geometry: Geometry
     via_roads: list[str] = []
     generated_via_point: bool = False
+    steps: list[RouteStep] = Field(default_factory=list, description="Real OSRM turn-by-turn maneuvers, for navigation mode")
 
     safety_score: int | None = Field(description="null when there is not enough data to score honestly")
     risk_level: str

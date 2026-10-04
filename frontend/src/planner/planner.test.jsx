@@ -160,7 +160,7 @@ describe("RouteList", () => {
 
 // ==================== route details ====================
 
-function renderDetails({ state = "recommended", selected = "route-2", preference = null, mutate } = {}) {
+function renderDetails({ state = "recommended", selected = "route-2", preference = null, mutate, onStartNavigation } = {}) {
   const data = makeResponse({ state });
   mutate?.(data);
   const route = data.routes.find((item) => item.id === selected);
@@ -175,6 +175,7 @@ function renderDetails({ state = "recommended", selected = "route-2", preference
       geoSource={data.geo_source}
       disclaimer={data.disclaimer}
       onFocusService={() => {}}
+      onStartNavigation={onStartNavigation}
     />
   );
 }
@@ -214,6 +215,23 @@ describe("RouteDetails", () => {
     expect(screen.getByRole("img", { name: "Safety score 84 out of 100" })).toBeInTheDocument();
     expect(screen.getByText(/Good mapped availability of hospitals/)).toBeInTheDocument();
     expect(screen.getByText(/not mapped for most of this route/)).toBeInTheDocument();
+  });
+
+  it("offers Start navigation only when a handler is given (a source and destination are set)", async () => {
+    const user = userEvent.setup();
+    const onStartNavigation = vi.fn();
+    renderDetails({ onStartNavigation });
+
+    const button = screen.getByRole("button", { name: /start navigation/i });
+    await user.click(button);
+
+    expect(onStartNavigation).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides Start navigation when there is nowhere to navigate to yet", () => {
+    renderDetails();
+
+    expect(screen.queryByRole("button", { name: /start navigation/i })).not.toBeInTheDocument();
   });
 
   it("lists every factor, and says which have no data", () => {

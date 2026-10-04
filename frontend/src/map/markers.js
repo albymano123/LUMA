@@ -35,6 +35,22 @@ export const endpointIcons = {
   end: pinIcon("end", "B", 34),
 };
 
+// The live-navigation position "puck": a heading cone (when the device
+// reports one) over a solid dot, distinct from the A/B place pins above
+// so it reads immediately as "this is you, moving" rather than a place.
+export function liveLocationIcon(heading) {
+  const cone = Number.isFinite(heading)
+    ? `<span class="lp-puck__cone" style="transform:translate(-50%,-100%) rotate(${heading}deg)"></span>`
+    : "";
+
+  return L.divIcon({
+    className: "lp-puck",
+    html: `${cone}<span class="lp-puck__dot"></span><span class="lp-puck__ring"></span>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
+}
+
 export const serviceIcon = (kind, index) =>
   pinIcon(kind, ICONS[kind] ?? ICONS.hospital, 30, Math.min(index * 35, 500));
 

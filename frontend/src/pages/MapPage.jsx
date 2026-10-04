@@ -9,6 +9,8 @@ import { riskInfo } from "../lib/risk";
 import AnalysisProgress from "../planner/AnalysisProgress";
 import BottomSheet from "../planner/BottomSheet";
 import { FactorsLegend, LayerControl, WeatherChip } from "../planner/MapControls";
+import NavigationView from "../planner/navigation/NavigationView";
+import { useNavigation } from "../planner/navigation/useNavigation";
 import RouteDetails from "../planner/RouteDetails";
 import RouteForm from "../planner/RouteForm";
 import RouteList, { PreferenceSwitch } from "../planner/RouteList";
@@ -192,6 +194,32 @@ export default function MapPage() {
 
 
   // ==================================================
+  // LIVE NAVIGATION
+  // ==================================================
+  // An additive mode over the same route data: it never computes its own
+  // routes or scores. Rerouting goes through the exact getSafeRoute() call
+  // above, so a recalculated route gets the same rule-based + AI/ML safety
+  // analysis and ranking as any other search.
+
+  const nav = useNavigation({
+    onRerouted: (result, routeId) => {
+      setData(result);
+      setSelectedId(routeId);
+      setPreference((current) => {
+        const newRoute = result.routes.find((item) => item.id === routeId);
+        return newRoute?.categories.includes(current) ? current : null;
+      });
+    },
+  });
+
+  const startNavigation = () => {
+    if (selected && destination) nav.start(selected, destination, mode);
+  };
+
+  const endNavigation = () => nav.stop();
+
+
+  // ==================================================
   // LAYOUT
   // ==================================================
 
@@ -252,6 +280,7 @@ export default function MapPage() {
             geoSource={data.geo_source}
             disclaimer={data.disclaimer}
             onFocusService={setFocusService}
+            onStartNavigation={source && destination ? startNavigation : undefined}
           />
         </div>
       )}
@@ -265,6 +294,10 @@ export default function MapPage() {
       <Navbar solid />
 
       <main id="main" className="planner__stage">
+        {nav.active ? (
+          <NavigationView nav={nav} destination={destination} isPhone={isPhone} onEnd={endNavigation} />
+        ) : (
+        <>
         <div className="planner__map">
           <MapView
             source={source}
@@ -346,6 +379,8 @@ export default function MapPage() {
               {results}
             </BottomSheet>
           </>
+        )}
+        </>
         )}
       </main>
     </div>

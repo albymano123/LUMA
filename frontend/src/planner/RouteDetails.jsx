@@ -8,12 +8,13 @@ import {
   Info,
   Layers,
   ListChecks,
+  Navigation,
   Star,
 } from "lucide-react";
 
 import { CATEGORY_LABELS, RECOMMENDATION_LABELS, formatDistance, formatDuration } from "../lib/format";
 import { CONFIDENCE, riskInfo } from "../lib/risk";
-import { Badge, Disclosure, FactorBar, Notice, ScoreRing, StatCard, Tip } from "../ui";
+import { Badge, Button, Disclosure, FactorBar, Notice, ScoreRing, StatCard, Tip } from "../ui";
 import EmergencyList from "./EmergencyList";
 import { EnvironmentPanel, MlStatus } from "./EnvironmentPanel";
 import WeatherCard from "./WeatherCard";
@@ -53,6 +54,7 @@ export default function RouteDetails({
   geoSource,
   disclaimer,
   onFocusService,
+  onStartNavigation,
 }) {
   if (!route) return null;
 
@@ -129,6 +131,12 @@ export default function RouteDetails({
         <StatCard label="Hospitals & clinics" value={emergencyAvailable ? route.hospital_count : "No data"} hint="near the route" />
         <StatCard label="Police stations" value={emergencyAvailable ? route.police_station_count : "No data"} hint="near the route" />
       </div>
+
+      {onStartNavigation && (
+        <Button block icon={<Navigation size={17} aria-hidden="true" />} onClick={onStartNavigation}>
+          Start navigation
+        </Button>
+      )}
 
       {/* ---------- explanations ---------- */}
       <Disclosure title="Why this route?" icon={<ListChecks size={18} aria-hidden="true" />} badge={<Badge outline>{reasonCount}</Badge>} defaultOpen>
