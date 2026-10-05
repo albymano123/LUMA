@@ -341,15 +341,109 @@ def test_a_place_elsewhere_in_india_can_still_be_found(monkeypatch):
     assert [place["name"] for place in search("Jaipur")] == ["Jaipur"]
 
 
-def test_nominatim_fallback_is_also_india_only_and_prefers_kerala(monkeypatch):
+def test_nominatim_fallback_makes_a_kerala_bounded_call_and_an_india_wide_call(monkeypatch):
     requests = serve(monkeypatch, geo, lambda r: httpx.Response(503) if "photon" in r.url.host else httpx.Response(200, json=[]))
 
     search()
 
-    fallback = next(request for request in requests if "nominatim" in request.url.host)
+    fallbacks = [request for request in requests if "nominatim" in request.url.host]
 
-    assert fallback.url.params["countrycodes"] == "in"
-    assert fallback.url.params["viewbox"] == "74.8,12.9,77.5,8.1"
+    assert len(fallbacks) == 2
+    assert all(request.url.params["countrycodes"] == "in" for request in fallbacks)
+
+    kerala_bounded = next(r for r in fallbacks if r.url.params["bounded"] == "1")
+    india_wide = next(r for r in fallbacks if r.url.params["bounded"] == "0")
+
+    # bounded=1 is a hard restriction, not just a preference: Kerala-first
+    # on the Nominatim fallback must not depend on viewbox ranking alone.
+    assert kerala_bounded.url.params["viewbox"] == "74.8,12.9,77.5,8.1"
+    assert india_wide.url.params["viewbox"] == "68.0,35.7,97.5,6.5"
+
+
+def test_both_photon_down_a_kerala_bounded_nominatim_result_still_comes_through(monkeypatch):
+    """c) both Photon calls fail -> the Kerala-bounded Nominatim call rescues the result."""
+
+    def handler(request):
+        if "photon" in request.url.host:
+            return httpx.Response(500)
+        if request.url.params["bounded"] == "1":
+            return httpx.Response(200, json=[
+                {"osm_type": "node", "osm_id": 1, "lat": "10.22", "lon": "76.19",
+                 "display_name": "Kodungallur, Thrissur, Kerala, India", "type": "town"},
+            ])
+        return httpx.Response(200, json=[])     # the India-wide leg has nothing extra to add
+
+    serve(monkeypatch, geo, handler)
+
+    assert [place["name"] for place in search("kod")] == ["Kodungallur"]
+
+
+def test_a_failing_india_wide_nominatim_search_does_not_discard_a_good_kerala_one(monkeypatch):
+    """d) Nominatim Kerala succeeds, Nominatim India fails on its own."""
+
+    def handler(request):
+        if "photon" in request.url.host:
+            return httpx.Response(500)
+        if request.url.params["bounded"] == "1":
+            return httpx.Response(200, json=[
+                {"osm_type": "node", "osm_id": 1, "lat": "10.22", "lon": "76.19",
+                 "display_name": "Kodungallur, Thrissur, Kerala, India", "type": "town"},
+            ])
+        return httpx.Response(500)
+
+    serve(monkeypatch, geo, handler)
+
+    assert [place["name"] for place in search("kod")] == ["Kodungallur"]
+
+
+def test_a_failing_kerala_bounded_nominatim_search_still_lets_india_wide_results_through(monkeypatch):
+    """e) Nominatim India succeeds, Nominatim Kerala fails on its own."""
+
+    def handler(request):
+        if "photon" in request.url.host:
+            return httpx.Response(500)
+        if request.url.params["bounded"] == "1":
+            return httpx.Response(500)
+        return httpx.Response(200, json=[
+            {"osm_type": "node", "osm_id": 2, "lat": "26.9", "lon": "75.8",
+             "display_name": "Jaipur, Rajasthan, India", "type": "city"},
+        ])
+
+    serve(monkeypatch, geo, handler)
+
+    assert [place["name"] for place in search("Jaipur")] == ["Jaipur"]
+
+
+def test_kod_returns_kerala_results_when_photon_has_them(monkeypatch):
+    """g) regression for the live bug: "kod" must surface Kerala matches."""
+
+    def handler(request):
+        if request.url.params["bbox"].startswith("74.8"):
+            return httpx.Response(200, json=photon_in(
+                "IN", ("Kodungallur", 10.22, 76.19), ("Kodakara", 10.37, 76.30), ("Kodanad", 10.18, 76.51),
+            ))
+
+        return httpx.Response(200, json=photon_in(
+            "IN", ("Kod", 22.88, 75.18), ("Kod", 26.54, 74.35),
+        ))
+
+    serve(monkeypatch, geo, handler)
+
+    names = [place["name"] for place in search("kod")]
+
+    assert names[:3] == ["Kodungallur", "Kodakara", "Kodanad"]
+    assert "Kod" in names
+
+
+def test_chalakudy_returns_the_kerala_result(monkeypatch):
+    """h) a real, named query returns its real Kerala match."""
+
+    serve(monkeypatch, geo, lambda r: httpx.Response(200, json=photon(("Chalakudy", 10.3041, 76.3371))))
+
+    place = search("chalakudy")[0]
+
+    assert place["name"] == "Chalakudy"
+    assert "Kerala" in place["description"]
 
 
 def test_kerala_cannot_crowd_out_the_rest_of_india(monkeypatch):

@@ -140,8 +140,40 @@ async def _photon_or_none(client, query, limit, bias, bbox):
         return None
 
 
+async def _nominatim(client, query, limit, bbox, bounded):
+    west, south, east, north = bbox
+
+    response = await client.get(
+        NOMINATIM_SEARCH_URL,
+        params={
+            "q": query, "format": "json", "limit": limit,
+            "countrycodes": "in",
+            "viewbox": f"{west},{north},{east},{south}",
+            "bounded": 1 if bounded else 0,
+        },
+    )
+    response.raise_for_status()
+
+    return [_format_nominatim(item) for item in response.json()]
+
+
+async def _nominatim_or_none(client, query, limit, bbox, bounded):
+    """
+    Same independent-failure shape as _photon_or_none, and for the same
+    reason: this only runs once Photon is already down, and a flaky second
+    provider must not be allowed to turn a working Kerala result into no
+    result at all.
+    """
+
+    try:
+        return await _nominatim(client, query, limit, bbox, bounded)
+    except (httpx.HTTPError, ValueError, KeyError) as error:
+        logger.warning("Nominatim search failed for bbox=%s: %s", bbox, error)
+        return None
+
+
 def _unique(results):
-    """Photon can return the same place several times (node + way)."""
+    """Photon (and occasionally Nominatim) can return the same place twice."""
 
     unique = []
     seen = set()
@@ -154,6 +186,23 @@ def _unique(results):
             unique.append(result)
 
     return unique
+
+
+def _kerala_first(kerala, india, limit):
+    """
+    Merges two already-geographically-restricted result sets (one Kerala,
+    one India-wide) Kerala first, at most 5 of them, so a well-known place
+    elsewhere in India is not pushed out by weaker matches in Kerala.
+    Either side may be None (that search failed on its own): the other's
+    real results still stand rather than being thrown away too. Used for
+    both Photon and the Nominatim fallback, so Kerala-first is guaranteed
+    the same way no matter which of the two ends up answering the request.
+    """
+
+    if kerala is None and india is None:
+        return None
+
+    return _unique((kerala or [])[:5] + (india or []))[:limit]
 
 
 async def search_places(query, near_lat=None, near_lon=None, limit=8):
@@ -196,34 +245,30 @@ async def search_places(query, near_lat=None, near_lon=None, limit=8):
             _photon_or_none(client, query, limit, bias, INDIA_BBOX),
         )
 
-        if kerala is not None or india is not None:
-            # At most 5 from Kerala, so a well-known place elsewhere in India
-            # is not pushed out by weaker matches in Kerala. Either side may
-            # have failed on its own (None): the other's real results still
-            # stand rather than being thrown away too.
-            results = _unique((kerala or [])[:5] + (india or []))[:limit]
+        merged = _kerala_first(kerala, india, limit)
+
+        if merged is not None:
+            results = merged
 
         else:
             logger.warning("Both Photon searches failed, trying Nominatim")
 
-            try:
-                west, south, east, north = KERALA_BBOX
-                response = await client.get(
-                    NOMINATIM_SEARCH_URL,
-                    params={
-                        "q": query, "format": "json", "limit": limit,
-                        "countrycodes": "in",
-                        # Prefer Kerala without excluding the rest of India.
-                        "viewbox": f"{west},{north},{east},{south}", "bounded": 0,
-                    },
-                )
-                response.raise_for_status()
+            # Same Kerala-bounded + India-wide shape as Photon, and the same
+            # independent-failure + Kerala-first merge, so a flaky Nominatim
+            # cannot silently lose Kerala's own results either, and Kerala
+            # is never just a soft viewbox preference on this path.
+            kerala_n, india_n = await asyncio.gather(
+                _nominatim_or_none(client, query, limit, KERALA_BBOX, bounded=True),
+                _nominatim_or_none(client, query, limit, INDIA_BBOX, bounded=False),
+            )
 
-                results = _unique([_format_nominatim(item) for item in response.json()])
+            merged = _kerala_first(kerala_n, india_n, limit)
 
-            except (httpx.HTTPError, ValueError, KeyError) as fallback_error:
-                logger.warning("Nominatim search failed: %s", fallback_error)
+            if merged is None:
+                logger.warning("Both Nominatim searches also failed")
                 return []
+
+            results = merged
 
     _search_cache.set(cache_key, results)
 
