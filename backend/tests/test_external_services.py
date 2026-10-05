@@ -366,3 +366,35 @@ def test_kerala_cannot_crowd_out_the_rest_of_india(monkeypatch):
     assert len(names) == 6
     assert names[:5] == [f"Kerala match {i}" for i in range(5)]
     assert "Delhi" in names
+
+
+def test_a_slow_or_failing_india_wide_search_does_not_discard_a_good_kerala_result(monkeypatch):
+    """
+    Regression: the India-wide bbox is a much bigger search than Kerala's
+    own and can time out on its own (seen live for "kod"). asyncio.gather()
+    used to propagate that one failure and throw away the Kerala search's
+    already-successful results too, falling back to Nominatim - which has
+    no hard Kerala restriction and returned zero Kerala matches.
+    """
+
+    def handler(request):
+        if request.url.params["bbox"].startswith("74.8"):
+            return httpx.Response(200, json=photon_in("IN", ("Kodungallur", 10.22, 76.19), ("Kodakara", 10.37, 76.30)))
+
+        return httpx.Response(500)      # the India-wide search fails on its own
+
+    serve(monkeypatch, geo, handler)
+
+    assert [place["name"] for place in search("kod")] == ["Kodungallur", "Kodakara"]
+
+
+def test_a_failing_kerala_search_still_lets_india_wide_results_through(monkeypatch):
+    def handler(request):
+        if request.url.params["bbox"].startswith("74.8"):
+            return httpx.Response(500)      # the Kerala-restricted search fails on its own
+
+        return httpx.Response(200, json=photon_in("IN", ("Jaipur", 26.9, 75.8)))
+
+    serve(monkeypatch, geo, handler)
+
+    assert [place["name"] for place in search("Jaipur")] == ["Jaipur"]

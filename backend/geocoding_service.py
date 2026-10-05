@@ -124,6 +124,22 @@ async def _photon(client, query, limit, bias, bbox):
     ]
 
 
+async def _photon_or_none(client, query, limit, bias, bbox):
+    """
+    None means this one call failed; [] means it succeeded with no matches.
+    The India-wide bbox is a much bigger search than the Kerala one and can
+    time out on its own, well after the Kerala call already succeeded - the
+    two are run with asyncio.gather() and must not fail together, or a slow
+    India-wide search silently throws away a fast, correct Kerala result.
+    """
+
+    try:
+        return await _photon(client, query, limit, bias, bbox)
+    except (httpx.HTTPError, ValueError, KeyError) as error:
+        logger.warning("Photon search failed for bbox=%s: %s", bbox, error)
+        return None
+
+
 def _unique(results):
     """Photon can return the same place several times (node + way)."""
 
@@ -175,18 +191,20 @@ async def search_places(query, near_lat=None, near_lon=None, limit=8):
 
     async with httpx.AsyncClient(timeout=8.0, headers=HEADERS) as client:
 
-        try:
-            kerala, india = await asyncio.gather(
-                _photon(client, query, limit, bias, KERALA_BBOX),
-                _photon(client, query, limit, bias, INDIA_BBOX),
-            )
+        kerala, india = await asyncio.gather(
+            _photon_or_none(client, query, limit, bias, KERALA_BBOX),
+            _photon_or_none(client, query, limit, bias, INDIA_BBOX),
+        )
 
+        if kerala is not None or india is not None:
             # At most 5 from Kerala, so a well-known place elsewhere in India
-            # is not pushed out by weaker matches in Kerala.
-            results = _unique(kerala[:5] + india)[:limit]
+            # is not pushed out by weaker matches in Kerala. Either side may
+            # have failed on its own (None): the other's real results still
+            # stand rather than being thrown away too.
+            results = _unique((kerala or [])[:5] + (india or []))[:limit]
 
-        except (httpx.HTTPError, ValueError, KeyError) as error:
-            logger.warning("Photon search failed, trying Nominatim: %s", error)
+        else:
+            logger.warning("Both Photon searches failed, trying Nominatim")
 
             try:
                 west, south, east, north = KERALA_BBOX
