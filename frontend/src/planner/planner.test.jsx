@@ -616,16 +616,16 @@ describe("AnalysisProgress", () => {
 
 const CHALAKUDY = { id: "N1", name: "Chalakudy", description: "Thrissur, Kerala", lat: 10.3, lon: 76.3 };
 
-function renderSearch(props = {}) {
+function renderSearch({ label = "Start", ...props } = {}) {
   const onChange = vi.fn();
 
   render(
     <ToastProvider>
-      <PlaceSearch label="Start" value={null} onChange={onChange} {...props} />
+      <PlaceSearch label={label} value={null} onChange={onChange} {...props} />
     </ToastProvider>
   );
 
-  return { onChange, input: screen.getByRole("combobox", { name: "Start" }) };
+  return { onChange, input: screen.getByRole("combobox", { name: label }) };
 }
 
 describe("PlaceSearch", () => {
@@ -725,6 +725,59 @@ describe("PlaceSearch", () => {
     await waitFor(() => expect(searchPlaces).toHaveBeenCalled());
 
     expect(searchPlaces.mock.calls[0][1]).toEqual(near);
+  });
+
+  it("works identically for the destination field (same component, same logic)", async () => {
+    searchPlaces.mockResolvedValue([CHALAKUDY]);
+    const { input, onChange } = renderSearch({ label: "Destination" });
+
+    await userEvent.type(input, "ch");
+    expect(searchPlaces).not.toHaveBeenCalled();
+
+    await userEvent.type(input, "alak");
+    const option = await screen.findByRole("option", { name: /Chalakudy/ });
+    await userEvent.click(option);
+
+    expect(onChange).toHaveBeenCalledWith(CHALAKUDY);
+  });
+
+  it("never leaves the spinner running after a search fails", async () => {
+    searchPlaces.mockRejectedValue(new Error("down"));
+    const { input } = renderSearch();
+
+    await userEvent.type(input, "Yyyyy");
+
+    await screen.findByText("Search is unavailable right now");
+    expect(document.querySelector(".ps__spinner")).not.toBeInTheDocument();
+  });
+
+  it("ignores a stale search that resolves after it was superseded", async () => {
+    let resolveFirst;
+
+    searchPlaces.mockImplementationOnce((query, near, signal) => new Promise((resolve, reject) => {
+      resolveFirst = resolve; // resolved manually below, after being "overtaken"
+      signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    }));
+    searchPlaces.mockResolvedValueOnce([{ ...CHALAKUDY, id: "N2", name: "Chalakudi" }]);
+
+    const { input } = renderSearch();
+
+    await userEvent.type(input, "Chalak");
+    await waitFor(() => expect(searchPlaces).toHaveBeenCalledTimes(1));
+
+    // Real gap so the first request's debounce has already fired (and is
+    // genuinely in flight) before it gets superseded by more typing.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+
+    await userEvent.type(input, "u");
+    await waitFor(() => expect(searchPlaces).toHaveBeenCalledTimes(2));
+
+    // The superseded request "arrives late" with different, stale results.
+    resolveFirst([CHALAKUDY]);
+
+    const option = await screen.findByRole("option", { name: /Chalakudi/ });
+    expect(option).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Chalakudy" })).not.toBeInTheDocument();
   });
 });
 

@@ -244,6 +244,11 @@ async function readEvents(response, onProgress) {
 // PLACE SEARCH
 // ==================================================
 
+// The backend tries Photon first (two calls run together, each capped at
+// 8s), then falls back to Nominatim (another 8s) if Photon fails - so a
+// legitimately slow-but-successful search can take close to 16s. This has
+// to clear that with margin, or a real, correctly Kerala-first result gets
+// thrown away client-side and shown as "search unavailable".
 export const searchPlaces = async (query, near, signal) => {
   const params = new URLSearchParams({ q: query });
 
@@ -252,7 +257,7 @@ export const searchPlaces = async (query, near, signal) => {
     params.set("lon", near.lon);
   }
 
-  const response = await request(`/geocode/search?${params}`, { signal, timeout: 12_000 });
+  const response = await request(`/geocode/search?${params}`, { signal, timeout: 20_000 });
 
   return (await response.json()).results;
 };

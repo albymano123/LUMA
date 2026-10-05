@@ -215,4 +215,33 @@ describe("searchPlaces", () => {
 
     expect(new URL(fetchMock.mock.calls[0][0]).searchParams.has("lat")).toBe(false);
   });
+
+  // The backend's own worst case (two Photon calls, then a Nominatim
+  // fallback, each capped at 8s server-side) can take close to 16s. This
+  // has to outlast that, or a slow-but-correct result gets thrown away
+  // and shown as "search unavailable" - exactly what broke autocomplete.
+  it("tolerates a search that is slow but still within the backend's own worst case", async () => {
+    mockFetch(
+      (_url, options) =>
+        new Promise((resolve, reject) => {
+          const timer = setTimeout(
+            () => resolve(new Response(JSON.stringify({ results: [{ id: "N1", name: "Chalakudy" }] }), { status: 200 })),
+            15_000
+          );
+          options.signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+        })
+    );
+
+    vi.useFakeTimers();
+    try {
+      const pending = searchPlaces("Chalak", null);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(pending).resolves.toEqual([{ id: "N1", name: "Chalakudy" }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

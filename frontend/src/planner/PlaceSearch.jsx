@@ -22,6 +22,7 @@ export default function PlaceSearch({ label, value, onChange, near, icon, autoFo
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [highlight, setHighlight] = useState(0);
+  const [slow, setSlow] = useState(false);
   const nearRef = useRef(near);
   const query = text.trim();
 
@@ -42,10 +43,17 @@ export default function PlaceSearch({ label, value, onChange, near, icon, autoFo
     if (!typing) return undefined;
 
     const controller = new AbortController();
+    let slowTimer;
 
     const timer = setTimeout(async () => {
       setLoading(true);
       setFailed(false);
+      setSlow(false);
+
+      // Photon (the free geocoder behind search) can legitimately take
+      // several seconds; a bare spinner with no feedback for that long
+      // reads as broken, so the hint grows more reassuring if it runs long.
+      slowTimer = setTimeout(() => setSlow(true), 4000);
 
       try {
         const results = await searchPlaces(query, nearRef.current, controller.signal);
@@ -57,12 +65,14 @@ export default function PlaceSearch({ label, value, onChange, near, icon, autoFo
           setFailed(true);
         }
       } finally {
+        clearTimeout(slowTimer);
         if (!controller.signal.aborted) setLoading(false);
       }
     }, DEBOUNCE_MS);
 
     return () => {
       clearTimeout(timer);
+      clearTimeout(slowTimer);
       controller.abort();
     };
   }, [query, typing]);
@@ -177,7 +187,9 @@ export default function PlaceSearch({ label, value, onChange, near, icon, autoFo
           </ul>
 
           {hint && <p className="ps__hint" role="status">{hint}</p>}
-          {loading && options.length === 0 && <p className="ps__hint" role="status">Searching…</p>}
+          {loading && options.length === 0 && (
+            <p className="ps__hint" role="status">{slow ? "Still searching…" : "Searching…"}</p>
+          )}
         </div>
       )}
     </div>
